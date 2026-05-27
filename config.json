@@ -1,7 +1,7 @@
 {
   "guild_id_for_fast_sync": 1456282878198415452,
   "database_path": "data/bot.sqlite3",
-  "levelup_channel_id": 0,
+  "levelup_channel_id": 1508363329641381948,
   "role_buttons": [],
   "role_categories": [
     {
