@@ -28,3 +28,7 @@
 - DISCORD_TOKEN = токен Discord-бота
 
 Если Bothost сам создаёт BOT_TOKEN из поля Bot Token, бот тоже его поймёт.
+
+
+## Если в профиле квадратики вместо русского текста
+В версии v4.2 добавлен расширенный поиск шрифтов и fallback через matplotlib/DejaVu Sans. Убедись, что Bothost переустановил зависимости из `requirements.txt`, где есть `matplotlib>=3.8.0`.

@@ -5,6 +5,7 @@ import math
 import os
 import random
 import sqlite3
+import subprocess
 import time
 from dataclasses import dataclass
 from datetime import timedelta
@@ -874,17 +875,99 @@ def draw_theme_background(size: tuple[int, int], theme: str, colors: list[str]) 
     return base
 
 
-def load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+_FONT_CACHE: dict[bool, Optional[str]] = {}
+
+
+def _try_font_path(path: Optional[str]) -> Optional[str]:
+    if not path:
+        return None
+    path = str(path).strip()
+    if path and Path(path).exists():
+        return path
+    return None
+
+
+def _find_font_path(bold: bool = False) -> Optional[str]:
+    cached = _FONT_CACHE.get(bold)
+    if cached:
+        return cached
+
+    # 1) Стандартные пути Windows/macOS/Linux + частые Docker-образы.
     candidates = [
         "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/dejavu/DejaVuSans-Bold.ttf" if bold else "/usr/share/fonts/dejavu/DejaVuSans.ttf",
+        "/usr/local/share/fonts/DejaVuSans-Bold.ttf" if bold else "/usr/local/share/fonts/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/noto/NotoSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/noto/NotoSans-Regular.ttf",
+        "/usr/share/fonts/opentype/noto/NotoSansCJK-Bold.ttc" if bold else "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+        "/usr/share/fonts/truetype/liberation2/LiberationSans-Bold.ttf" if bold else "/usr/share/fonts/truetype/liberation2/LiberationSans-Regular.ttf",
+        "/usr/share/fonts/truetype/freefont/FreeSansBold.ttf" if bold else "/usr/share/fonts/truetype/freefont/FreeSans.ttf",
+        "/usr/share/fonts/truetype/ubuntu/Ubuntu-B.ttf" if bold else "/usr/share/fonts/truetype/ubuntu/Ubuntu-R.ttf",
         "C:/Windows/Fonts/arialbd.ttf" if bold else "C:/Windows/Fonts/arial.ttf",
+        "C:/Windows/Fonts/segoeuib.ttf" if bold else "C:/Windows/Fonts/segoeui.ttf",
         "/System/Library/Fonts/Supplemental/Arial Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Arial.ttf",
+        "/System/Library/Fonts/Supplemental/Helvetica Bold.ttf" if bold else "/System/Library/Fonts/Supplemental/Helvetica.ttf",
     ]
-    for path in candidates:
+    for candidate in candidates:
+        path = _try_font_path(candidate)
+        if path:
+            _FONT_CACHE[bold] = path
+            return path
+
+    # 2) Если на хостинге есть fontconfig, просим систему найти шрифт.
+    font_queries = [
+        "DejaVu Sans:style=Bold" if bold else "DejaVu Sans:style=Book",
+        "Noto Sans:style=Bold" if bold else "Noto Sans:style=Regular",
+        "Liberation Sans:style=Bold" if bold else "Liberation Sans:style=Regular",
+        "Arial:style=Bold" if bold else "Arial:style=Regular",
+        "sans-serif:style=Bold" if bold else "sans-serif:style=Regular",
+    ]
+    for query in font_queries:
         try:
-            return ImageFont.truetype(path, size)
+            result = subprocess.run(
+                ["fc-match", "-f", "%{file}", query],
+                check=False,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            path = _try_font_path(result.stdout)
+            if path:
+                _FONT_CACHE[bold] = path
+                return path
+        except Exception:
+            pass
+
+    # 3) Последний надёжный fallback: matplotlib ставится через requirements
+    # и приносит DejaVu Sans, который нормально рисует кириллицу.
+    try:
+        from matplotlib import font_manager
+
+        font_path = font_manager.findfont(
+            "DejaVu Sans",
+            fallback_to_default=True,
+            rebuild_if_missing=False,
+        )
+        path = _try_font_path(font_path)
+        if path:
+            _FONT_CACHE[bold] = path
+            return path
+    except Exception:
+        pass
+
+    _FONT_CACHE[bold] = None
+    return None
+
+
+def load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFont.ImageFont:
+    font_path = _find_font_path(bold)
+    if font_path:
+        try:
+            return ImageFont.truetype(font_path, size)
         except OSError:
-            continue
+            pass
+
+    # Если этот fallback сработал — на хостинге реально нет шрифта.
+    # Карточка всё равно создастся, но кириллица может быть квадратиками.
     return ImageFont.load_default()
 
 

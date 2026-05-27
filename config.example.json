@@ -1,5 +1,5 @@
 {
-  "guild_id_for_fast_sync": 1456282878198415452,
+  "guild_id_for_fast_sync": 0,
   "database_path": "data/bot.sqlite3",
   "levelup_channel_id": 0,
   "role_buttons": [],
@@ -167,7 +167,7 @@
           "label": "Silver",
           "role_id": 0,
           "emoji": "🥈",
-          "description": "1508448703596335124"
+          "description": "Вставь правильный ID роли Silver"
         },
         {
           "label": "Bronze",
@@ -329,7 +329,7 @@
     "color": "#FFB3C7",
     "footer": "PEACH LOUNGE • выбери роли, загляни в войсы и чувствуй себя как дома",
     "image_url": "https://media.discordapp.net/attachments/1456631696979005580/1508514141302685786/ChatGPT_Image_25_2026_._19_54_59.png?ex=6a17cb06&is=6a167986&hm=2ef58f037cab1c3f9e6e9a6e0ed02e3d996224598515a3fed8a513af87719d69&=&format=webp&quality=lossless&width=1521&height=856",
-    "auto_role_ids": [1456633582335295674]
+    "auto_role_ids": []
   },
   "profile_backgrounds": {
     "default": {
