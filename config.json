@@ -1,0 +1,501 @@
+{
+  "guild_id_for_fast_sync": 1456282878198415452,
+  "database_path": "data/bot.sqlite3",
+  "levelup_channel_id": 1508363329641381948,
+  "role_buttons": [],
+  "role_categories": [
+    {
+      "name": "Увлечения",
+      "placeholder": "🌟 Выбери увлечения",
+      "selection_mode": "toggle",
+      "min_values": 0,
+      "max_values": 5,
+      "roles": [
+        {
+          "label": "Talented",
+          "role_id": 1508450293619097792,
+          "emoji": "🌟"
+        },
+        {
+          "label": "Movie Lover",
+          "role_id": 1508450241228177458,
+          "emoji": "🍿"
+        },
+        {
+          "label": "Music Lover",
+          "role_id": 1508450202489454662,
+          "emoji": "🎧"
+        },
+        {
+          "label": "Artist",
+          "role_id": 1508450140535525547,
+          "emoji": "🎨"
+        },
+        {
+          "label": "Gamer",
+          "role_id": 1508450072290132140,
+          "emoji": "🎮"
+        }
+      ]
+    },
+    {
+      "name": "Игры",
+      "placeholder": "🎮 Выбери игры",
+      "selection_mode": "toggle",
+      "min_values": 0,
+      "max_values": 9,
+      "roles": [
+        {
+          "label": "Endfield",
+          "role_id": 1508449794484342806,
+          "emoji": "🧬"
+        },
+        {
+          "label": "Genshin Impact",
+          "role_id": 1508449741762199622,
+          "emoji": "✨"
+        },
+        {
+          "label": "Minecraft",
+          "role_id": 1508449678222561483,
+          "emoji": "⛏️"
+        },
+        {
+          "label": "R.E.P.O",
+          "role_id": 1508449632085086268,
+          "emoji": "👻"
+        },
+        {
+          "label": "Overwatch",
+          "role_id": 1508449580294082681,
+          "emoji": "🧡"
+        },
+        {
+          "label": "CS GO",
+          "role_id": 1508449517350031533,
+          "emoji": "💣"
+        },
+        {
+          "label": "Dota 2",
+          "role_id": 1508449459187486800,
+          "emoji": "🛡️"
+        },
+        {
+          "label": "Valorant",
+          "role_id": 1508449404955263096,
+          "emoji": "🔺"
+        },
+        {
+          "label": "League of Legends",
+          "role_id": 1508449316031955004,
+          "emoji": "🌀"
+        }
+      ]
+    },
+    {
+      "name": "Позиция",
+      "placeholder": "⚔️ Выбери позицию",
+      "selection_mode": "toggle",
+      "min_values": 0,
+      "max_values": 5,
+      "roles": [
+        {
+          "label": "ADC",
+          "role_id": 1508446152335556799,
+          "emoji": "🏹"
+        },
+        {
+          "label": "Mid",
+          "role_id": 1508446254647218236,
+          "emoji": "🔮"
+        },
+        {
+          "label": "Jungle",
+          "role_id": 1508446737512140900,
+          "emoji": "🌿"
+        },
+        {
+          "label": "Top",
+          "role_id": 1508446659426783243,
+          "emoji": "🛡️"
+        },
+        {
+          "label": "Support",
+          "role_id": 1508446857192280064,
+          "emoji": "💡"
+        }
+      ]
+    },
+    {
+      "name": "Ранг",
+      "placeholder": "🏆 Выбери ранг",
+      "selection_mode": "exclusive",
+      "min_values": 0,
+      "max_values": 1,
+      "roles": [
+        {
+          "label": "Challenger",
+          "role_id": 1508448259214020688,
+          "emoji": "👑"
+        },
+        {
+          "label": "Master",
+          "role_id": 1508448341627900015,
+          "emoji": "🧠"
+        },
+        {
+          "label": "Diamond",
+          "role_id": 1508448413467938816,
+          "emoji": "💎"
+        },
+        {
+          "label": "Emerald",
+          "role_id": 1508448496296919083,
+          "emoji": "🟢"
+        },
+        {
+          "label": "Platinum",
+          "role_id": 1508448550521143336,
+          "emoji": "🧊"
+        },
+        {
+          "label": "Gold",
+          "role_id": 1508448638773497906,
+          "emoji": "🥇"
+        },
+        {
+          "label": "Silver",
+          "role_id": 0,
+          "emoji": "🥈",
+          "description": "1508448703596335124"
+        },
+        {
+          "label": "Bronze",
+          "role_id": 1508448746546139296,
+          "emoji": "🥉"
+        },
+        {
+          "label": "Iron",
+          "role_id": 1508448814791655524,
+          "emoji": "🔩"
+        }
+      ]
+    }
+  ],
+  "voice_xp": {
+    "xp_per_minute": 5,
+    "coins_per_minute": 1,
+    "min_members_in_channel": 2,
+    "ignored_voice_channel_ids": []
+  },
+  "leveling": {
+    "base_xp": 60,
+    "curve": 2,
+    "keep_all_level_roles": false,
+    "level_roles": [
+      {
+        "level": 1,
+        "role_id": 1508450964795818085,
+        "emoji": "🌱",
+        "label": "🌱・1 Level"
+      },
+      {
+        "level": 5,
+        "role_id": 1508451034102628352,
+        "emoji": "🍑",
+        "label": "🍑・5 Level"
+      },
+      {
+        "level": 10,
+        "role_id": 1508451089798795336,
+        "emoji": "🌸",
+        "label": "🌸・10 Level"
+      },
+      {
+        "level": 15,
+        "role_id": 1508451139669201008,
+        "emoji": "💗",
+        "label": "💗・15 Level"
+      },
+      {
+        "level": 20,
+        "role_id": 1508451182841168034,
+        "emoji": "💜",
+        "label": "💜・20 Level"
+      },
+      {
+        "level": 25,
+        "role_id": 1508451230706303017,
+        "emoji": "🔮",
+        "label": "🔮・25 Level"
+      },
+      {
+        "level": 30,
+        "role_id": 1508451284582400091,
+        "emoji": "🌌",
+        "label": "🌌・30 Level"
+      },
+      {
+        "level": 35,
+        "role_id": 1508451344174944296,
+        "emoji": "🪐",
+        "label": "🪐・35 Level"
+      },
+      {
+        "level": 40,
+        "role_id": 1508451412625850439,
+        "emoji": "⚡",
+        "label": "⚡・40 Level"
+      },
+      {
+        "level": 45,
+        "role_id": 1508451475569774765,
+        "emoji": "💫",
+        "label": "💫・45 Level"
+      },
+      {
+        "level": 50,
+        "role_id": 1508451521275101204,
+        "emoji": "🧊",
+        "label": "🧊・50 Level"
+      },
+      {
+        "level": 55,
+        "role_id": 1508451595606822922,
+        "emoji": "🦋",
+        "label": "🦋・55 Level"
+      },
+      {
+        "level": 60,
+        "role_id": 1508451670856826960,
+        "emoji": "🍀",
+        "label": "🍀・60 Level"
+      },
+      {
+        "level": 65,
+        "role_id": 1508451716511699096,
+        "emoji": "🌿",
+        "label": "🌿・65 Level"
+      },
+      {
+        "level": 70,
+        "role_id": 1508451761826824285,
+        "emoji": "🔥",
+        "label": "🔥・70 Level"
+      },
+      {
+        "level": 75,
+        "role_id": 1508451819284594838,
+        "emoji": "🌋",
+        "label": "🌋・75 Level"
+      },
+      {
+        "level": 80,
+        "role_id": 1508451866625708032,
+        "emoji": "🏵️",
+        "label": "🏵️・80 Level"
+      },
+      {
+        "level": 85,
+        "role_id": 1508451926587474010,
+        "emoji": "🏆",
+        "label": "🏆・85 Level"
+      },
+      {
+        "level": 90,
+        "role_id": 1508451977414316092,
+        "emoji": "👑",
+        "label": "👑・90 Level"
+      },
+      {
+        "level": 95,
+        "role_id": 1508452035010498590,
+        "emoji": "💠",
+        "label": "💠・95 Level"
+      },
+      {
+        "level": 100,
+        "role_id": 1508452087652945930,
+        "emoji": "🌈",
+        "label": "🌈・100 Level"
+      }
+    ]
+  },
+  "welcome": {
+    "enabled": true,
+    "channel_id": 1456282878811046110,
+    "title": "🍑 ДОБРО ПОЖАЛОВАТЬ В PEACH LOUNGE!",
+    "message": "**Ну здравствуй, новый персик 🍑**\n\nПохоже, тебя не просто занесло сюда случайно — судьба решила, что тебе пора найти место, где можно катать, болтать, ловить вайб, смотреть кино и зависать в войсах до ночи.\n\nУ нас тут уютно, весело и временами очень хаотично... но по-хорошему 😌\n\nПосмотри на фото снизу, чтобы быстро ознакомиться с сервером.",
+    "color": "#FFB3C7",
+    "footer": "PEACH LOUNGE • выбери роли, загляни в войсы и чувствуй себя как дома",
+    "image_url": "https://media.discordapp.net/attachments/1456631696979005580/1508514141302685786/ChatGPT_Image_25_2026_._19_54_59.png?ex=6a17cb06&is=6a167986&hm=2ef58f037cab1c3f9e6e9a6e0ed02e3d996224598515a3fed8a513af87719d69&=&format=webp&quality=lossless&width=1521&height=856",
+  "auto_role_ids": [1456633582335295674]
+  },
+  "profile_backgrounds": {
+    "default": {
+      "name": "Default",
+      "price": 0,
+      "theme": "default",
+      "colors": [
+        "#23272A",
+        "#5865F2"
+      ]
+    },
+    "sunset": {
+      "name": "Sunset",
+      "price": 250,
+      "theme": "default",
+      "colors": [
+        "#ff7e5f",
+        "#feb47b"
+      ]
+    },
+    "forest": {
+      "name": "Forest",
+      "price": 350,
+      "theme": "forest",
+      "colors": [
+        "#134E5E",
+        "#71B280"
+      ]
+    },
+    "night": {
+      "name": "Night City",
+      "price": 400,
+      "theme": "anime_city",
+      "colors": [
+        "#141E30",
+        "#243B55"
+      ]
+    },
+    "sakura": {
+      "name": "Sakura Dream",
+      "price": 550,
+      "theme": "sakura",
+      "colors": [
+        "#8E2DE2",
+        "#FFB6C1"
+      ]
+    },
+    "ocean": {
+      "name": "Ocean Wave",
+      "price": 500,
+      "theme": "ocean",
+      "colors": [
+        "#0F2027",
+        "#2C5364"
+      ]
+    },
+    "aurora": {
+      "name": "Aurora",
+      "price": 650,
+      "theme": "default",
+      "colors": [
+        "#0f0c29",
+        "#00c9a7"
+      ]
+    },
+    "mountain": {
+      "name": "Mountain Air",
+      "price": 700,
+      "theme": "mountain",
+      "colors": [
+        "#1e3c72",
+        "#2a5298"
+      ]
+    },
+    "panda": {
+      "name": "Panda Mood",
+      "price": 750,
+      "theme": "panda",
+      "colors": [
+        "#2C3E50",
+        "#BDC3C7"
+      ]
+    },
+    "fox": {
+      "name": "Fox Fire",
+      "price": 850,
+      "theme": "fox",
+      "colors": [
+        "#603813",
+        "#F09819"
+      ]
+    },
+    "wolf": {
+      "name": "Moon Wolf",
+      "price": 950,
+      "theme": "wolf",
+      "colors": [
+        "#232526",
+        "#414345"
+      ]
+    },
+    "anime": {
+      "name": "Anime Bloom",
+      "price": 1100,
+      "theme": "sakura",
+      "colors": [
+        "#5f2c82",
+        "#49a09d"
+      ]
+    }
+  },
+  "embed_templates": {
+    "welcome_soft": {
+      "title": "🌙 Добро пожаловать на {server}",
+      "description": "{member}, рады видеть тебя у нас!\n\nЗалетай в каналы, выбирай роли через `/rolepanel` и чувствуй себя как дома. Сейчас на сервере **{count}** участников.",
+      "color": "#B388FF",
+      "footer": "Приятного общения ✨"
+    },
+    "welcome_anime": {
+      "title": "🌸 Новый герой появился на {server}",
+      "description": "{member}, твоя история начинается здесь. Выбирай роли, знакомься с ребятами и не забывай заглядывать в голосовые каналы — там качается XP.",
+      "color": "#FF8CC6",
+      "footer": "Добро пожаловать в нашу атмосферу 🌸"
+    },
+    "rules_short": {
+      "title": "📜 Коротко о правилах",
+      "description": "1. Уважай других участников.\n2. Без токсичности, спама и провокаций.\n3. NSFW/шок-контент запрещён.\n4. Реклама — только с разрешения администрации.\n5. Администрация имеет право принимать решения по ситуации.",
+      "color": "#5865F2",
+      "footer": "Незнание правил не освобождает от ответственности."
+    },
+    "roles_info": {
+      "title": "🎭 Выбор ролей",
+      "description": "Нажми `/rolepanel`, чтобы выбрать игры, увлечения, позицию и ранг.\n\nРоли можно менять самому, без помощи администрации.",
+      "color": "#57F287",
+      "footer": "Если роль не выдается — позови администрацию."
+    },
+    "voice_xp_info": {
+      "title": "🎙️ XP за голосовые каналы",
+      "description": "За активность в ГС начисляется XP и серверная валюта.\n\nЧем больше времени проводишь с ребятами, тем выше уровень и круче роль в профиле.",
+      "color": "#FEE75C",
+      "footer": "AFK/дефаф не фармим 😉"
+    },
+    "event_announce": {
+      "title": "🎉 Серверный ивент",
+      "description": "Сегодня собираемся на активность!\n\nВремя, правила и награды администрация напишет ниже. Зови друзей и залетай заранее.",
+      "color": "#EB459E",
+      "footer": "Участникам — бонусы и настроение."
+    },
+    "news_update": {
+      "title": "📰 Обновление сервера",
+      "description": "Мы подготовили новые изменения для {server}. Следите за новостями, тестируйте функции и пишите предложения администрации.",
+      "color": "#00C2FF",
+      "footer": "Спасибо, что развиваете сервер вместе с нами."
+    },
+    "peach_welcome": {
+      "title": "🍑 ДОБРО ПОЖАЛОВАТЬ В PEACH LOUNGE!",
+      "description": "{member}\n\n**Ну здравствуй, новый персик 🍑**\n\nПохоже, тебя не просто занесло сюда случайно — судьба решила, что тебе пора найти место, где можно катать, болтать, ловить вайб, смотреть кино и зависать в войсах до ночи.\n\nУ нас тут уютно, весело и временами очень хаотично... но по-хорошему 😌\n\nПосмотри на фото снизу, чтобы быстро ознакомиться с сервером.",
+      "color": "#FFB3C7",
+      "footer": "PEACH LOUNGE • выбери роли, загляни в войсы и чувствуй себя как дома",
+      "image_url": "https://media.discordapp.net/attachments/1456631696979005580/1508514141302685786/ChatGPT_Image_25_2026_._19_54_59.png?ex=6a17cb06&is=6a167986&hm=2ef58f037cab1c3f9e6e9a6e0ed02e3d996224598515a3fed8a513af87719d69&=&format=webp&quality=lossless&width=1521&height=856"
+    },
+    "peach_rules_start": {
+      "title": "📌 PEACH LOUNGE — быстрый старт",
+      "description": "Добро пожаловать в наш уютный хаос 🍑\n\n1. Выбери роли через `/rolepanel`\n2. Загляни в голосовые — там качается XP\n3. Посмотри правила и каналы сервера\n4. Не стесняйся знакомиться и звать ребят в игры/кино",
+      "color": "#FFC2D1",
+      "footer": "Приятного вайба в Peach Lounge"
+    }
+  }
+}
