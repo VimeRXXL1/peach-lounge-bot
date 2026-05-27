@@ -4,9 +4,12 @@ import json
 import math
 import os
 import random
+import re
 import sqlite3
 import subprocess
 import time
+import urllib.request
+import urllib.error
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -137,6 +140,134 @@ def draw_text_with_shadow(
     x, y = xy
     draw.text((x + 2, y + 2), text_value, font=font, fill=shadow)
     draw.text((x, y), text_value, font=font, fill=fill)
+
+
+# Emoji rendering for profile cards.
+# On many Linux hosts Pillow can draw Cyrillic after our font fix, but not colored emoji.
+# These helpers render emoji as small Twemoji PNGs cached in data/emoji_cache.
+EMOJI_RE = re.compile(
+    r"[\U0001F1E6-\U0001F1FF]{2}|"
+    r"[\U0001F300-\U0001FAFF]\ufe0f?(?:\u200d[\U0001F300-\U0001FAFF]\ufe0f?)*|"
+    r"[\u2600-\u27BF]\ufe0f?"
+)
+TWEMOJI_BASE_URL = "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72x72"
+
+
+def _emoji_codepoint(emoji_text: str) -> str:
+    return "-".join(f"{ord(ch):x}" for ch in emoji_text if ch != "\ufe0e").lower()
+
+
+def _emoji_cache_path(emoji_text: str) -> Path:
+    cache_dir = Path("data") / "emoji_cache"
+    cache_dir.mkdir(parents=True, exist_ok=True)
+    return cache_dir / f"{_emoji_codepoint(emoji_text)}.png"
+
+
+def _download_emoji(emoji_text: str) -> Optional[Path]:
+    path = _emoji_cache_path(emoji_text)
+    if path.exists() and path.stat().st_size > 0:
+        return path
+
+    codepoint = _emoji_codepoint(emoji_text)
+    url = f"{TWEMOJI_BASE_URL}/{codepoint}.png"
+    try:
+        with urllib.request.urlopen(url, timeout=4) as response:
+            data = response.read()
+        if data:
+            path.write_bytes(data)
+            return path
+    except Exception:
+        return None
+    return None
+
+
+def _load_emoji_image(emoji_text: str, size: int) -> Optional[Image.Image]:
+    path = _download_emoji(emoji_text)
+    if path is None:
+        return None
+    try:
+        return Image.open(path).convert("RGBA").resize((size, size), Image.LANCZOS)
+    except Exception:
+        return None
+
+
+def _font_px(font: ImageFont.FreeTypeFont | ImageFont.ImageFont) -> int:
+    return int(getattr(font, "size", 18) or 18)
+
+
+def _plain_text_size(draw: ImageDraw.ImageDraw, value: str, font: ImageFont.FreeTypeFont | ImageFont.ImageFont) -> tuple[int, int]:
+    if not value:
+        return 0, _font_px(font)
+    bbox = draw.textbbox((0, 0), value, font=font)
+    return bbox[2] - bbox[0], bbox[3] - bbox[1]
+
+
+def rich_text_size(draw: ImageDraw.ImageDraw, value: str, font: ImageFont.FreeTypeFont | ImageFont.ImageFont) -> tuple[int, int]:
+    value = str(value)
+    emoji_size = max(16, int(_font_px(font) * 1.12))
+    total_w = 0
+    max_h = emoji_size
+
+    pos = 0
+    for match in EMOJI_RE.finditer(value):
+        if match.start() > pos:
+            w, h = _plain_text_size(draw, value[pos:match.start()], font)
+            total_w += w
+            max_h = max(max_h, h)
+        total_w += emoji_size + 2
+        max_h = max(max_h, emoji_size)
+        pos = match.end()
+
+    if pos < len(value):
+        w, h = _plain_text_size(draw, value[pos:], font)
+        total_w += w
+        max_h = max(max_h, h)
+
+    return int(total_w), int(max_h)
+
+
+def draw_rich_text(
+    image: Image.Image,
+    draw: ImageDraw.ImageDraw,
+    xy: tuple[int, int],
+    value: str,
+    font: ImageFont.FreeTypeFont | ImageFont.ImageFont,
+    fill: tuple[int, int, int, int] = (255, 255, 255, 255),
+) -> None:
+    value = str(value)
+    x, y = xy
+    start_x = x
+    emoji_size = max(16, int(_font_px(font) * 1.12))
+    _, text_h = _plain_text_size(draw, "Ag", font)
+    emoji_y = y + max(0, (text_h - emoji_size) // 2)
+
+    pos = 0
+    for match in EMOJI_RE.finditer(value):
+        if match.start() > pos:
+            chunk = value[pos:match.start()]
+            draw.text((x, y), chunk, font=font, fill=fill)
+            w, _ = _plain_text_size(draw, chunk, font)
+            x += w
+
+        emoji_text = match.group(0)
+        emoji_image = _load_emoji_image(emoji_text, emoji_size)
+        if emoji_image is not None:
+            image.alpha_composite(emoji_image, (int(x), int(emoji_y)))
+        else:
+            # No internet/CDN/font: draw a neutral small badge instead of a broken square.
+            draw.rounded_rectangle(
+                (x, emoji_y + 2, x + emoji_size, emoji_y + emoji_size + 2),
+                radius=max(4, emoji_size // 4),
+                fill=(255, 255, 255, 42),
+                outline=(255, 255, 255, 90),
+                width=1,
+            )
+        x += emoji_size + 2
+        pos = match.end()
+
+    if pos < len(value):
+        chunk = value[pos:]
+        draw.text((x, y), chunk, font=font, fill=fill)
 
 
 # ------------------------- DATABASE -------------------------
@@ -1047,7 +1178,7 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     for label, value in stat_blocks:
         draw.rounded_rectangle((sx, sy, sx + 144, sy + 74), radius=18, fill=(255, 255, 255, 30))
         draw.text((sx + 14, sy + 12), label, font=tiny_font, fill=(210, 220, 255, 200))
-        draw.text((sx + 14, sy + 37), truncate_text(value, 14), font=small_font, fill=(255, 255, 255, 242))
+        draw_rich_text(image, draw, (sx + 14, sy + 37), truncate_text(value, 14), small_font, fill=(255, 255, 255, 242))
         sx += 156
 
     # Progress bar
@@ -1074,8 +1205,8 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     max_chips = 12
     for role in ordered_roles[:max_chips]:
         label = truncate_text(role_display.get(role.id, role.name), 22)
-        bbox = draw.textbbox((0, 0), label, font=small_font)
-        chip_w = min(max(110, bbox[2] - bbox[0] + 32), 245)
+        label_w, _ = rich_text_size(draw, label, small_font)
+        chip_w = min(max(110, label_w + 32), 245)
         if chip_x + chip_w > width - 84:
             chip_x = 382
             chip_y += 44
@@ -1083,7 +1214,7 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
             break
         color = role.color.to_rgb() if role.color.value else parse_hex_color(colors[-1] if colors else "#5865F2")
         draw.rounded_rectangle((chip_x, chip_y, chip_x + chip_w, chip_y + 34), radius=17, fill=(*color, 82), outline=(255, 255, 255, 36), width=1)
-        draw.text((chip_x + 16, chip_y + 7), label, font=small_font, fill=(255, 255, 255, 238))
+        draw_rich_text(image, draw, (chip_x + 16, chip_y + 7), label, small_font, fill=(255, 255, 255, 238))
         chip_x += chip_w + 10
         shown += 1
     hidden_count = max(0, len(ordered_roles) - shown)
