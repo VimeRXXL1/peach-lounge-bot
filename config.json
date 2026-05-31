@@ -1,7 +1,7 @@
 {
   "guild_id_for_fast_sync": 0,
   "database_path": "data/bot.sqlite3",
-  "levelup_channel_id": 0,
+  "levelup_channel_id": 1508363329641381948,
   "role_buttons": [],
   "role_categories": [
     {
@@ -322,14 +322,14 @@
     ]
   },
   "welcome": {
-    "enabled": false,
-    "channel_id": 0,
+    "enabled": true,
+    "channel_id": 1456282878811046110,
     "title": "🍑 ДОБРО ПОЖАЛОВАТЬ В PEACH LOUNGE!",
     "message": "**Ну здравствуй, новый персик 🍑**\n\nПохоже, тебя не просто занесло сюда случайно — судьба решила, что тебе пора найти место, где можно катать, болтать, ловить вайб, смотреть кино и зависать в войсах до ночи.\n\nУ нас тут уютно, весело и временами очень хаотично... но по-хорошему 😌\n\nПосмотри на фото снизу, чтобы быстро ознакомиться с сервером.",
     "color": "#FFB3C7",
     "footer": "PEACH LOUNGE • выбери роли, загляни в войсы и чувствуй себя как дома",
     "image_url": "https://media.discordapp.net/attachments/1456631696979005580/1508514141302685786/ChatGPT_Image_25_2026_._19_54_59.png?ex=6a17cb06&is=6a167986&hm=2ef58f037cab1c3f9e6e9a6e0ed02e3d996224598515a3fed8a513af87719d69&=&format=webp&quality=lossless&width=1521&height=856",
-    "auto_role_ids": []
+    "auto_role_ids": [1456633582335295674]
   },
   "profile_backgrounds": {
     "default": {
