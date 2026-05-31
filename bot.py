@@ -1532,8 +1532,8 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     stat_cards = [
         ("location", "Находится в", current_voice),
         ("mic", "Голосовой онлайн", format_duration_minutes(voice_minutes)),
-        ("star", "Топ по онлайну", f"{rank or '-'} место"),
-        ("heart", "Любимая комната", fav_name),
+        ("top", "Топ по онлайну", f"{rank or '-'} место"),
+        ("room", "Любимая комната", fav_name),
     ]
     positions = [(348, 154), (570, 154), (348, 244), (570, 244)]
     for (icon_kind, label, value), (x, y) in zip(stat_cards, positions):
@@ -2815,10 +2815,11 @@ PROFILE_ICON_FILES = {
     "location": ASSET_ROOT / "profile_icons" / "location.png",
     "mic": ASSET_ROOT / "profile_icons" / "mic.png",
     "top": ASSET_ROOT / "profile_icons" / "top.png",
+    "star": ASSET_ROOT / "profile_icons" / "top.png",
     "heart": ASSET_ROOT / "profile_icons" / "room.png",
     "room": ASSET_ROOT / "profile_icons" / "room.png",
     "pair": ASSET_ROOT / "profile_icons" / "pair.png",
-    "clan": ASSET_ROOT / "profile_icons" / "clan.png",
+    "clan": ASSET_ROOT / "profile_icons" / "achievement.png",
     "achievement": ASSET_ROOT / "profile_icons" / "achievement.png",
     "currency": ASSET_ROOT / "profile_icons" / "currency.png",
 }
