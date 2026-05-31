@@ -154,7 +154,8 @@ TWEMOJI_BASE_URL = "https://cdn.jsdelivr.net/gh/twitter/twemoji@14.0.2/assets/72
 
 
 def _emoji_codepoint(emoji_text: str) -> str:
-    return "-".join(f"{ord(ch):x}" for ch in emoji_text if ch != "\ufe0e").lower()
+    # Twemoji filenames usually do not include variation selectors FE0E/FE0F.
+    return "-".join(f"{ord(ch):x}" for ch in emoji_text if ch not in ("\ufe0e", "\ufe0f")).lower()
 
 
 def _emoji_cache_path(emoji_text: str) -> Path:
@@ -3079,7 +3080,7 @@ ACHIEVEMENT_DEFS = [
     {"id": "level_5", "emoji": "❤️‍🔥", "title": "Peach Rising", "desc": "Достигни 5 уровня профиля.", "metric": "level", "target": 5, "icon": "level"},
     {"id": "background_1", "emoji": "🎨", "title": "Своя атмосфера", "desc": "Купи первый фон профиля.", "metric": "backgrounds", "target": 1, "icon": "backgrounds"},
     {"id": "background_4", "emoji": "🎗️", "title": "Коллекционер", "desc": "Собери 4 фона профиля.", "metric": "backgrounds", "target": 4, "icon": "backgrounds"},
-    {"id": "relation_1", "emoji": "💕", "title": "Не один", "desc": "Получи первую связь / пару на сервере.", "metric": "relations", "target": 1, "icon": "relations"},
+    {"id": "relation_1", "emoji": "❤️", "title": "Не один", "desc": "Получи первую связь / пару на сервере.", "metric": "relations", "target": 1, "icon": "relations"},
     {"id": "case_5", "emoji": "🎁", "title": "Любитель кейсов", "desc": "Открой 5 кейсов.", "metric": "cases", "target": 5, "icon": "cases"},
     {"id": "daily_7", "emoji": "⚡️", "title": "Верность серверу", "desc": "Забери daily 7 раз.", "metric": "daily", "target": 7, "icon": "daily"},
     {"id": "balance_1000", "emoji": "🍑", "title": "На стиле", "desc": "Накопи 1000 валюты сервера.", "metric": "balance", "target": 1000, "icon": "balance"},
@@ -3206,37 +3207,72 @@ def create_achievement_screen(member: discord.Member, page: int = 0) -> io.Bytes
     title_font = load_font(36, True)
     text_font = load_font(22)
     small_font = load_font(18)
+    tiny_font = load_font(14)
 
     draw_text_with_shadow(draw, (42, 34), "Достижения Peach Lounge", title_font)
     metrics = achievement_progress(member)
     done_count = sum(1 for x in metrics if x["done"])
-    draw.text((46, 82), f"{member.display_name} • выполнено {done_count}/{len(metrics)}", font=text_font, fill=(225, 232, 255, 220))
+    draw.text(
+        (46, 82),
+        f"{member.display_name} • выполнено {done_count}/{len(metrics)}",
+        font=text_font,
+        fill=(225, 232, 255, 220),
+    )
 
     per_page = 5
     max_page = max(0, math.ceil(len(metrics) / per_page) - 1)
     page = max(0, min(page, max_page))
     items = metrics[page * per_page : (page + 1) * per_page]
 
+    # Без квадратных иконок слева: emoji теперь идет прямо в заголовке достижения.
     y = 128
     for item in items:
-        draw_glass(draw, (40, y, width - 40, y + 104), radius=22, fill=(255, 255, 255, 24))
-        # icon tile
-        draw.rounded_rectangle((58, y + 16, 110, y + 68), radius=18, fill=(255, 255, 255, 18), outline=(255, 255, 255, 30), width=1)
-        draw_achievement_symbol(image, draw, (61, y + 19), done=bool(item["done"]), icon_kind=str(item.get("icon", "achievement")))
-        # text
-        draw_rich_text(image, draw, (134, y + 16), f"{item.get('emoji', '🏅')} {item['title']}", text_font, fill=(255, 255, 255, 242))
-        draw.text((134, y + 46), item["desc"], font=small_font, fill=(210, 220, 255, 205))
-        progress_text = "Получено" if item["done"] else f"{item['value']}/{item['target']}"
+        done = bool(item["done"])
+        draw_glass(
+            draw,
+            (40, y, width - 40, y + 104),
+            radius=22,
+            fill=(255, 255, 255, 28 if done else 20),
+        )
+
+        # Small status dot only, not a big icon tile.
+        status_color = (255, 190, 90, 230) if done else (125, 155, 210, 170)
+        draw.ellipse((60, y + 22, 72, y + 34), fill=status_color)
+
+        title_text = f"{item.get('emoji', '🏅')} {item['title']}"
+        draw_rich_text(image, draw, (88, y + 16), title_text, text_font, fill=(255, 255, 255, 242))
+        draw.text((88, y + 46), item["desc"], font=small_font, fill=(210, 220, 255, 205))
+
+        progress_text = "Получено" if done else f"{item['value']}/{item['target']}"
         draw.text((width - 220, y + 20), progress_text, font=small_font, fill=(255, 255, 255, 235))
-        bar_x, bar_y, bar_w, bar_h = 134, y + 78, width - 350, 12
+
+        bar_x, bar_y, bar_w, bar_h = 88, y + 78, width - 305, 12
         draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=6, fill=(10, 12, 20, 175))
         fill_w = int(bar_w * float(item["percent"]))
         if fill_w:
-            fill_color = (255, 165, 120, 230) if item["done"] else (130, 170, 255, 230)
+            fill_color = (255, 165, 120, 230) if done else (130, 170, 255, 230)
             draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + bar_h), radius=6, fill=fill_color)
+
+        if done:
+            draw.text((width - 115, y + 48), "✓", font=text_font, fill=(255, 210, 120, 230))
+
         y += 112
 
-    draw.text((width // 2 - 80, height - 50), f"Страница {page + 1}/{max_page + 1}", font=small_font, fill=(230, 236, 255, 210))
+    draw.text(
+        (width // 2 - 80, height - 50),
+        f"Страница {page + 1}/{max_page + 1}",
+        font=small_font,
+        fill=(230, 236, 255, 210),
+    )
+
+    # Tiny hint so users understand it is a paged achievement menu.
+    draw.text(
+        (44, height - 50),
+        "Полученные достижения отображаются в профиле",
+        font=tiny_font,
+        fill=(210, 220, 245, 135),
+    )
+
     out = io.BytesIO()
     image.save(out, format="PNG")
     out.seek(0)
