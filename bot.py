@@ -3074,7 +3074,7 @@ THEME_ART_MAP = {
 ACHIEVEMENT_DEFS = [
     {"id": "msg_50", "emoji": "💬", "title": "Первые слова", "desc": "Напиши 50 сообщений на сервере.", "metric": "messages", "target": 50, "icon": "messages"},
     {"id": "msg_250", "emoji": "🗣️", "title": "Общительный персик", "desc": "Напиши 250 сообщений.", "metric": "messages", "target": 250, "icon": "messages"},
-    {"id": "voice_60", "emoji": "🎙️", "title": "Голос есть", "desc": "Проведи 1 час в голосовых каналах.", "metric": "voice", "target": 60, "icon": "voice"},
+    {"id": "voice_60", "emoji": "⏱️", "title": "Голос есть", "desc": "Проведи 1 час в голосовых каналах.", "metric": "voice", "target": 60, "icon": "voice"},
     {"id": "voice_600", "emoji": "🌙", "title": "Ночной житель", "desc": "Проведи 10 часов в голосовых.", "metric": "voice", "target": 600, "icon": "voice"},
     {"id": "level_5", "emoji": "⭐", "title": "Peach Rising", "desc": "Достигни 5 уровня профиля.", "metric": "level", "target": 5, "icon": "level"},
     {"id": "background_1", "emoji": "🎨", "title": "Своя атмосфера", "desc": "Купи первый фон профиля.", "metric": "backgrounds", "target": 1, "icon": "backgrounds"},
