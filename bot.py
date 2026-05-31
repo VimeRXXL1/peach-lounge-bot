@@ -1280,41 +1280,61 @@ def load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFo
 
 
 async def create_profile_card(member: discord.Member) -> io.BytesIO:
+    """Главный экран профиля в стиле компактной dashboard-карточки."""
     row = bot.db.get_user(member.guild.id, member.id)
     backgrounds = bot.config.get("profile_backgrounds", {})
     background_key = row.get("background", "default")
     bg_data = backgrounds.get(background_key, backgrounds.get("default", {}))
     theme = str(bg_data.get("theme", background_key))
-    colors = bg_data.get("colors", ["#23272A", "#5865F2"])
+    colors = bg_data.get("colors", ["#111827", "#2f3f46"])
 
-    width, height = 1200, 620
+    width, height = 1120, 620
     image = draw_theme_background((width, height), theme, colors)
     draw = ImageDraw.Draw(image)
 
-    # Main glass panels
-    draw.rounded_rectangle((28, 28, width - 28, height - 28), radius=34, fill=(10, 12, 20, 124), outline=(255, 255, 255, 42), width=2)
-    draw.rounded_rectangle((52, 56, 330, height - 56), radius=30, fill=(255, 255, 255, 28), outline=(255, 255, 255, 28), width=1)
-    draw.rounded_rectangle((356, 56, width - 52, 345), radius=30, fill=(255, 255, 255, 24), outline=(255, 255, 255, 24), width=1)
-    draw.rounded_rectangle((356, 365, width - 52, height - 56), radius=30, fill=(255, 255, 255, 22), outline=(255, 255, 255, 20), width=1)
+    # Dark glass overlay like the reference.
+    image.alpha_composite(Image.new("RGBA", (width, height), (0, 0, 0, 88)))
+    draw = ImageDraw.Draw(image)
 
+    # Fonts.
+    title_font = load_font(36, True)
+    name_font = load_font(28, True)
+    medium_bold = load_font(22, True)
+    text_font = load_font(20)
+    small_font = load_font(17)
+    tiny_font = load_font(14)
+
+    def glass_rect(box: tuple[int, int, int, int], radius: int = 22, alpha: int = 42, outline: int = 28) -> None:
+        draw.rounded_rectangle(box, radius=radius, fill=(255, 255, 255, alpha), outline=(255, 255, 255, outline), width=1)
+
+    def pill(box: tuple[int, int, int, int], alpha: int = 42) -> None:
+        draw.rounded_rectangle(box, radius=(box[3] - box[1]) // 2, fill=(255, 255, 255, alpha), outline=(255, 255, 255, 18), width=1)
+
+    # Outer card and panels.
+    glass_rect((18, 18, width - 18, height - 18), radius=34, alpha=28, outline=34)
+    glass_rect((50, 56, 300, height - 62), radius=28, alpha=34, outline=24)
+    glass_rect((320, 56, 808, 356), radius=24, alpha=32, outline=20)
+    glass_rect((824, 56, width - 50, 356), radius=24, alpha=32, outline=20)
+    glass_rect((824, 382, width - 50, 520), radius=24, alpha=24, outline=18)
+
+    # Avatar + mini profile left.
     avatar_bytes = await member.display_avatar.replace(size=256, static_format="png").read()
-    avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA").resize((184, 184))
-    mask = Image.new("L", (184, 184), 0)
-    ImageDraw.Draw(mask).ellipse((0, 0, 184, 184), fill=255)
-    image.paste(avatar, (99, 78), mask)
-    draw.ellipse((92, 71, 290, 269), outline=(255, 255, 255, 220), width=5)
+    avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA").resize((152, 152))
+    mask = Image.new("L", (152, 152), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, 152, 152), radius=18, fill=255)
+    image.paste(avatar, (99, 76), mask)
+    draw.rounded_rectangle((95, 72, 255, 232), radius=20, outline=(255, 255, 255, 82), width=2)
 
-    title_font = load_font(46, True)
-    medium_bold = load_font(29, True)
-    text_font = load_font(23)
-    small_font = load_font(18)
-    tiny_font = load_font(16)
+    display_name = truncate_text(member.display_name, 15)
+    name_w, _ = rich_text_size(draw, display_name, name_font)
+    draw_rich_text(image, draw, (175 - name_w // 2, 252), display_name, name_font, fill=(255, 255, 255, 245))
 
-    # Core stats
+    # Core stats.
     level = int(row["level"])
     xp = int(row["xp"])
     balance = int(row["balance"])
     voice_minutes = int(row.get("voice_minutes", 0))
+    message_count = int(row.get("message_count", 0))
     rank = bot.db.get_rank(member.guild.id, member.id)
     warnings_count = len(bot.db.get_warnings(member.guild.id, member.id))
     current_level_xp = bot.xp_for_level(level)
@@ -1322,120 +1342,146 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     progress = 0 if next_level_xp == current_level_xp else (xp - current_level_xp) / (next_level_xp - current_level_xp)
     progress = max(0, min(1, progress))
 
-    display_name = truncate_text(member.display_name, 22)
-    draw_text_with_shadow(draw, (380, 78), display_name, title_font)
-    draw.text((382, 130), f"@{truncate_text(member.name, 28)}", font=small_font, fill=(224, 230, 255, 215))
+    # Achievements count.
+    try:
+        achieved_count = sum(1 for ach in calculate_achievements(member) if ach.get("completed"))
+    except Exception:
+        achieved_count = len(bot.db.get_purchases(member.guild.id, member.id, "background"))
 
-    # Left panel data
+    # Left economy chips.
+    coin_text = f"{balance:,}".replace(",", " ")
+    ach_text = f"{achieved_count} шт."
+    left_chips = [
+        ("🧷", coin_text),
+        ("🏅", ach_text),
+    ]
+    chip_y = 318
+    for icon, value in left_chips:
+        pill((78, chip_y, 270, chip_y + 50), alpha=42)
+        draw_rich_text(image, draw, (98, chip_y + 13), icon, text_font, fill=(210, 228, 255, 235))
+        val_w, _ = rich_text_size(draw, value, medium_bold)
+        draw_rich_text(image, draw, (248 - val_w, chip_y + 12), value, medium_bold, fill=(255, 255, 255, 245))
+        chip_y += 62
+
+    # Small left meta.
     joined = member.joined_at.strftime("%d.%m.%Y") if member.joined_at else "—"
     created = member.created_at.strftime("%d.%m.%Y") if member.created_at else "—"
-    left_lines = [
+    meta_lines = [
         ("LVL", str(level)),
         ("TOP", f"#{rank or '-'}"),
         ("ГС", format_duration_minutes(voice_minutes)),
         ("Вход", joined),
         ("Акк", created),
     ]
-    y = 292
-    for label, value in left_lines:
-        draw.rounded_rectangle((78, y, 304, y + 42), radius=16, fill=(255, 255, 255, 28))
-        draw.text((96, y + 10), label, font=tiny_font, fill=(210, 220, 255, 195))
-        draw.text((160, y + 8), value, font=small_font, fill=(255, 255, 255, 232))
-        y += 50
+    y = 450
+    for label, value in meta_lines[:3]:
+        draw.text((82, y), label, font=tiny_font, fill=(210, 220, 255, 170))
+        draw.text((162, y - 2), value, font=small_font, fill=(255, 255, 255, 220))
+        y += 32
 
-    # Stat blocks
-    stat_blocks = [
-        ("Уровень", str(level)),
-        ("XP", f"{xp:,}".replace(",", " ")),
-        ("Баланс", f"{balance:,} 🪙".replace(",", " ")),
-        ("Варны", str(warnings_count)),
-        ("До LVL", f"{max(next_level_xp - xp, 0):,} XP".replace(",", " ")),
+    # Center title.
+    pill((458, 82, 666, 124), alpha=34)
+    title = "Статистика"
+    tw, _ = _plain_text_size(draw, title, medium_bold)
+    draw.text((562 - tw // 2, 92), title, font=medium_bold, fill=(255, 255, 255, 235))
+
+    # Status blocks like the reference.
+    current_voice = "Не в во.."
+    if member.voice and member.voice.channel:
+        current_voice = truncate_text(member.voice.channel.name, 12)
+
+    fav = bot.db.favorite_voice_channel(member.guild.id, member.id)
+    if fav:
+        fav_channel = member.guild.get_channel(int(fav["channel_id"]))
+        fav_name = truncate_text(fav_channel.name if fav_channel else "Комната", 12)
+    else:
+        fav_name = "♡ 0"
+
+    stat_cards = [
+        ("📍", "Находится в", current_voice),
+        ("🎙️", "Голосовой онлайн", format_duration_minutes(voice_minutes)),
+        ("⭐", "Топ по онлайну", f"{rank or '-'} место"),
+        ("💙", "Любимая комната", fav_name),
     ]
-    sx, sy = 380, 172
-    for label, value in stat_blocks:
-        draw.rounded_rectangle((sx, sy, sx + 144, sy + 74), radius=18, fill=(255, 255, 255, 30))
-        draw.text((sx + 14, sy + 12), label, font=tiny_font, fill=(210, 220, 255, 200))
-        draw_rich_text(image, draw, (sx + 14, sy + 37), truncate_text(value, 14), small_font, fill=(255, 255, 255, 242))
-        sx += 156
+    positions = [(348, 154), (570, 154), (348, 244), (570, 244)]
+    for (icon, label, value), (x, y) in zip(stat_cards, positions):
+        glass_rect((x, y, x + 205, y + 70), radius=18, alpha=30, outline=16)
+        # small icon bubble
+        draw.rounded_rectangle((x + 12, y + 21, x + 42, y + 51), radius=11, fill=(120, 175, 220, 60))
+        draw_rich_text(image, draw, (x + 18, y + 27), icon, tiny_font, fill=(210, 232, 255, 235))
+        lw, _ = _plain_text_size(draw, label, tiny_font)
+        draw.text((x + 54, y + 14), label, font=tiny_font, fill=(205, 214, 235, 155))
+        draw_rich_text(image, draw, (x + 54, y + 36), value, medium_bold, fill=(255, 255, 255, 238))
 
-    # Progress bar
-    bar_x, bar_y, bar_w, bar_h = 380, 278, 724, 34
-    draw.text((bar_x, bar_y - 30), f"Прогресс: {xp:,}/{next_level_xp:,} XP".replace(",", " "), font=small_font, fill=(235, 240, 255, 220))
-    draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=17, fill=(20, 22, 34, 185))
+    # Center bottom progress dots.
+    level_dots_y = 322
+    pill((380, level_dots_y, 752, level_dots_y + 42), alpha=32)
+    for i in range(8):
+        cx = 422 + i * 40
+        color = (255, 218, 76, 210) if i == min(7, level // 15) else (255, 255, 255, 50)
+        draw.ellipse((cx - 13, level_dots_y + 8, cx + 13, level_dots_y + 34), fill=color)
+    # Slim progress line under stats.
+    bar_x, bar_y, bar_w, bar_h = 356, 390, 430, 18
+    draw.text((356, 366), f"Прогресс: {xp:,}/{next_level_xp:,} XP".replace(",", " "), font=small_font, fill=(235, 240, 255, 200))
+    draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=9, fill=(10, 12, 22, 170))
     fill_w = int(bar_w * progress)
     if fill_w > 0:
-        fill_color = parse_hex_color(colors[-1] if colors else "#FFFFFF", default=(255, 255, 255))
-        draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + bar_h), radius=17, fill=(*fill_color, 255))
-    pct = int(progress * 100)
-    draw.text((bar_x + bar_w - 62, bar_y + 7), f"{pct}%", font=tiny_font, fill=(255, 255, 255, 235))
+        accent = parse_hex_color(colors[-1] if colors else "#7C86FF", default=(124, 134, 255))
+        draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + bar_h), radius=9, fill=(*accent, 230))
+    draw.text((bar_x + bar_w + 12, bar_y - 2), f"{int(progress * 100)}%", font=tiny_font, fill=(255, 255, 255, 200))
 
-    # Roles with config emoji labels
-    role_display = build_role_display_map(bot.config)
-    member_roles = [role for role in reversed(member.roles) if role.name != "@everyone"]
-    known_roles = [role for role in member_roles if role.id in role_display]
-    other_roles = [role for role in member_roles if role.id not in role_display and not role.managed]
-    ordered_roles = known_roles + other_roles
+    # Right emblem panel.
+    emblem_center = (957, 160)
+    accent = parse_hex_color(colors[-1] if colors else "#79A7FF", default=(121, 167, 255))
+    # A soft glowing peach/drop-like emblem.
+    for r, a in [(92, 20), (70, 28), (52, 36)]:
+        draw.ellipse((emblem_center[0] - r, emblem_center[1] - r, emblem_center[0] + r, emblem_center[1] + r), fill=(*accent, a))
+    draw.polygon(
+        [
+            (emblem_center[0], emblem_center[1] - 78),
+            (emblem_center[0] - 56, emblem_center[1] + 36),
+            (emblem_center[0], emblem_center[1] + 74),
+            (emblem_center[0] + 56, emblem_center[1] + 36),
+        ],
+        outline=(*accent, 230),
+        fill=(*accent, 28),
+    )
+    draw.line((emblem_center[0], emblem_center[1] - 56, emblem_center[0] - 26, emblem_center[1] + 32, emblem_center[0] + 28, emblem_center[1] + 32, emblem_center[0], emblem_center[1] - 56), fill=(205, 225, 255, 200), width=5)
 
-    draw.text((382, 386), "Роли участника", font=medium_bold, fill=(255, 255, 255, 242))
-    chip_x, chip_y = 382, 430
-    shown = 0
-    max_chips = 12
-    for role in ordered_roles[:max_chips]:
-        label = truncate_text(role_display.get(role.id, role.name), 22)
-        label_w, _ = rich_text_size(draw, label, small_font)
-        chip_w = min(max(110, label_w + 32), 245)
-        if chip_x + chip_w > width - 84:
-            chip_x = 382
-            chip_y += 44
-        if chip_y > height - 118:
-            break
-        color = role.color.to_rgb() if role.color.value else parse_hex_color(colors[-1] if colors else "#5865F2")
-        draw.rounded_rectangle((chip_x, chip_y, chip_x + chip_w, chip_y + 34), radius=17, fill=(*color, 82), outline=(255, 255, 255, 36), width=1)
-        draw_rich_text(image, draw, (chip_x + 16, chip_y + 7), label, small_font, fill=(255, 255, 255, 238))
-        chip_x += chip_w + 10
-        shown += 1
-    hidden_count = max(0, len(ordered_roles) - shown)
-    if hidden_count:
-        if chip_x + 90 > width - 84:
-            chip_x = 382
-            chip_y += 44
-        draw.rounded_rectangle((chip_x, chip_y, chip_x + 90, chip_y + 34), radius=17, fill=(255, 255, 255, 32))
-        draw.text((chip_x + 16, chip_y + 7), f"+{hidden_count}", font=small_font, fill=(255, 255, 255, 230))
-
-    # Relationships and current background
-    relations = bot.db.relationships_for_member(member.guild.id, member.id)[:3]
-    relation_parts = []
+    # Relationship/clan blocks.
+    relations = bot.db.relationships_for_member(member.guild.id, member.id)
+    pair_text = "Пары нет"
+    pair_sub = "Пусто"
     for relation in relations:
-        other_id = relation["user2_id"] if relation["user1_id"] == member.id else relation["user1_id"]
-        other = member.guild.get_member(other_id)
-        other_name = truncate_text(other.display_name if other else str(other_id), 16)
-        relation_parts.append(f"{RELATIONSHIP_LABELS.get(relation['relation_type'], relation['relation_type'])}: {other_name}")
-    relation_text = "  •  ".join(relation_parts) if relation_parts else "Связей пока нет"
-    draw.text((382, height - 88), f"Связи: {truncate_text(relation_text, 74)}", font=small_font, fill=(235, 240, 255, 220))
-    draw.text((382, height - 62), f"Фон: {bg_data.get('name', background_key)}", font=tiny_font, fill=(220, 226, 255, 190))
+        if relation["relation_type"] in ("love", "marriage"):
+            other_id = relation["user2_id"] if relation["user1_id"] == member.id else relation["user1_id"]
+            other = member.guild.get_member(other_id)
+            pair_text = "Пара"
+            pair_sub = truncate_text(other.display_name if other else str(other_id), 15)
+            break
+
+    right_rows = [
+        ("💞", pair_text, pair_sub),
+        ("🎭", "Клана нет", "Пусто"),
+    ]
+    ry = 395
+    for icon, main, sub in right_rows:
+        draw.ellipse((850, ry + 10, 892, ry + 52), fill=(255, 255, 255, 34), outline=(255, 255, 255, 24), width=1)
+        draw_rich_text(image, draw, (860, ry + 20), icon, small_font, fill=(255, 255, 255, 210))
+        draw_rich_text(image, draw, (908, ry + 12), main, medium_bold, fill=(255, 255, 255, 240))
+        draw.text((908, ry + 40), sub, font=tiny_font, fill=(210, 220, 235, 145))
+        ry += 64
+
+    # Footer small technical info.
+    draw.text((356, 548), f"Сообщения: {message_count:,}".replace(",", " "), font=tiny_font, fill=(220, 228, 255, 155))
+    draw.text((530, 548), f"Варны: {warnings_count}", font=tiny_font, fill=(220, 228, 255, 155))
+    draw.text((632, 548), f"Фон: {bg_data.get('name', background_key)}", font=tiny_font, fill=(220, 228, 255, 155))
 
     output = io.BytesIO()
     image.save(output, format="PNG")
     output.seek(0)
     return output
 
-
-
-# ------------------------- PROFILE SYSTEM V2 -------------------------
-ACHIEVEMENT_DEFS: list[dict[str, Any]] = [
-    {"key": "messages_1", "title": "Первое сообщение", "desc": "Написать 1 сообщение", "metric": "message_count", "target": 1, "emoji": "💬"},
-    {"key": "messages_100", "title": "Разговорчивый персик", "desc": "Написать 100 сообщений", "metric": "message_count", "target": 100, "emoji": "💬"},
-    {"key": "messages_500", "title": "Душа чата", "desc": "Написать 500 сообщений", "metric": "message_count", "target": 500, "emoji": "📝"},
-    {"key": "voice_60", "title": "Первый час в ГС", "desc": "Провести 1 час в голосовых", "metric": "voice_minutes", "target": 60, "emoji": "🎙️"},
-    {"key": "voice_600", "title": "Ночной голос", "desc": "Провести 10 часов в голосовых", "metric": "voice_minutes", "target": 600, "emoji": "🌙"},
-    {"key": "voice_6000", "title": "Voice Legend", "desc": "Провести 100 часов в голосовых", "metric": "voice_minutes", "target": 6000, "emoji": "🏆"},
-    {"key": "level_5", "title": "Пятый уровень", "desc": "Достигнуть 5 уровня", "metric": "level", "target": 5, "emoji": "🍑"},
-    {"key": "level_25", "title": "Стабильный актив", "desc": "Достигнуть 25 уровня", "metric": "level", "target": 25, "emoji": "🔮"},
-    {"key": "background_1", "title": "Первый стиль", "desc": "Купить или получить 1 фон", "metric": "backgrounds", "target": 1, "emoji": "🎨"},
-    {"key": "background_5", "title": "Коллекционер фонов", "desc": "Собрать 5 фонов", "metric": "backgrounds", "target": 5, "emoji": "🖼️"},
-    {"key": "relation_1", "title": "Не одинокий персик", "desc": "Создать первую связь", "metric": "relationships", "target": 1, "emoji": "💞"},
-    {"key": "case_5", "title": "Любитель кейсов", "desc": "Открыть 5 кейсов", "metric": "case_opened", "target": 5, "emoji": "🎁"},
-]
 
 
 def user_achievement_metrics(member: discord.Member) -> dict[str, int]:
