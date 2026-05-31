@@ -1550,7 +1550,7 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
 
     stat_cards = [
         ("📍", "Находится в", current_voice),
-        ("🔊", "Голосовой онлайн", format_duration_minutes(voice_minutes)),
+        ("🎙️", "Голосовой онлайн", format_duration_minutes(voice_minutes)),
         ("🏆", "Топ по онлайну", f"{rank or '-'} место"),
         ("⭐", "Любимая комната", fav_name),
     ]
@@ -1562,13 +1562,77 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
         draw.text((x + 54, y + 14), label, font=tiny_font, fill=(205, 214, 235, 155))
         draw_rich_text(image, draw, (x + 54, y + 36), truncate_text(value, 14), medium_bold, fill=(255, 255, 255, 238))
 
-    # Progress / level milestones
-    level_dots_y = 322
-    pill((380, level_dots_y, 752, level_dots_y + 42), alpha=32)
-    for i in range(8):
-        cx = 422 + i * 40
-        color = (255, 218, 76, 210) if i == min(7, level // 15) else (255, 255, 255, 50)
-        draw.ellipse((cx - 13, level_dots_y + 8, cx + 13, level_dots_y + 34), fill=color)
+    # Roles strip: instead of unclear level dots, show participant roles.
+    roles_y = 322
+    roles_box = (380, roles_y, 752, roles_y + 42)
+    pill(roles_box, alpha=32)
+
+    visible_roles = [
+        role for role in member.roles
+        if role != member.guild.default_role and not role.managed
+    ]
+    visible_roles = sorted(visible_roles, key=lambda r: r.position, reverse=True)
+
+    role_x = roles_box[0] + 10
+    max_role_x = roles_box[2] - 10
+    role_font = tiny_font
+
+    if not visible_roles:
+        empty_text = "Ролей пока нет"
+        ew, eh = _plain_text_size(draw, empty_text, role_font)
+        draw.text(
+            (roles_box[0] + ((roles_box[2] - roles_box[0]) - ew) / 2, roles_y + 13),
+            empty_text,
+            font=role_font,
+            fill=(220, 228, 255, 145),
+        )
+    else:
+        shown_count = 0
+        hidden_count = 0
+        for role in visible_roles:
+            clean_role_name = clean_display_value(role.name, 18)
+            role_text = clean_role_name
+            tw, _ = rich_text_size(draw, role_text, role_font)
+            chip_w = min(max(58, tw + 22), 132)
+
+            if role_x + chip_w > max_role_x:
+                hidden_count += 1
+                continue
+
+            role_color = role.color.to_rgb() if role.color.value else (255, 170, 200)
+            draw.rounded_rectangle(
+                (role_x, roles_y + 7, role_x + chip_w, roles_y + 35),
+                radius=14,
+                fill=(*role_color, 86),
+                outline=(*role_color, 145),
+                width=1,
+            )
+            draw_rich_text(
+                image,
+                draw,
+                (role_x + 10, roles_y + 12),
+                truncate_text(role_text, 14),
+                role_font,
+                fill=(255, 255, 255, 230),
+            )
+
+            role_x += chip_w + 8
+            shown_count += 1
+
+            if shown_count >= 3:
+                hidden_count += max(0, len(visible_roles) - shown_count)
+                break
+
+        if hidden_count > 0 and role_x + 46 <= max_role_x:
+            more_text = f"+{hidden_count}"
+            draw.rounded_rectangle(
+                (role_x, roles_y + 7, role_x + 42, roles_y + 35),
+                radius=14,
+                fill=(255, 255, 255, 32),
+                outline=(255, 255, 255, 55),
+                width=1,
+            )
+            draw.text((role_x + 11, roles_y + 12), more_text, font=role_font, fill=(255, 255, 255, 210))
 
     bar_x, bar_y, bar_w, bar_h = 356, 390, 430, 18
     draw.text((356, 366), f"Прогресс: {xp:,}/{next_level_xp:,} XP".replace(",", " "), font=small_font, fill=(235, 240, 255, 200))
