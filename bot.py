@@ -1550,7 +1550,7 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
 
     stat_cards = [
         ("📍", "Находится в", current_voice),
-        ("🎙️", "Голосовой онлайн", format_duration_minutes(voice_minutes)),
+        ("🔊", "Голосовой онлайн", format_duration_minutes(voice_minutes)),
         ("🏆", "Топ по онлайну", f"{rank or '-'} место"),
         ("⭐", "Любимая комната", fav_name),
     ]
