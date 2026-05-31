@@ -1489,20 +1489,17 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     except Exception:
         achieved_count = len(bot.db.get_purchases(member.guild.id, member.id, "background"))
 
-    # Left economy chips: currency icon is configurable in config.json -> currency.symbol
+    # Left economy chips: plain emoji, no PNG icons.
     chip_y = 318
-    pill((78, chip_y, 270, chip_y + 50), alpha=42)
-    draw_currency_icon(image, draw, (112, chip_y + 25), radius=17)
     coin_text = f"{balance:,}".replace(",", " ")
-    val_w, _ = rich_text_size(draw, coin_text, medium_bold)
-    draw_rich_text(image, draw, (248 - val_w, chip_y + 12), coin_text, medium_bold, fill=(255, 255, 255, 245))
-
-    chip_y += 62
-    pill((78, chip_y, 270, chip_y + 50), alpha=42)
-    draw_profile_icon(image, draw, "achievement", (96, chip_y + 10, 130, chip_y + 44))
     ach_text = f"{achieved_count} шт."
-    val_w, _ = rich_text_size(draw, ach_text, medium_bold)
-    draw_rich_text(image, draw, (248 - val_w, chip_y + 12), ach_text, medium_bold, fill=(255, 255, 255, 245))
+    left_chips = [("🍑", coin_text), ("🔥", ach_text)]
+    for emoji, value in left_chips:
+        pill((78, chip_y, 270, chip_y + 50), alpha=42)
+        draw_rich_text(image, draw, (98, chip_y + 12), emoji, text_font, fill=(255, 255, 255, 235))
+        val_w, _ = rich_text_size(draw, value, medium_bold)
+        draw_rich_text(image, draw, (248 - val_w, chip_y + 12), value, medium_bold, fill=(255, 255, 255, 245))
+        chip_y += 62
 
     joined = member.joined_at.strftime("%d.%m.%Y") if member.joined_at else "—"
     created = member.created_at.strftime("%d.%m.%Y") if member.created_at else "—"
@@ -1530,18 +1527,18 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
         fav_name = "Нет"
 
     stat_cards = [
-        ("location", "Находится в", current_voice),
-        ("mic", "Голосовой онлайн", format_duration_minutes(voice_minutes)),
-        ("top", "Топ по онлайну", f"{rank or '-'} место"),
-        ("room", "Любимая комната", fav_name),
+        ("📍", "Находится в", current_voice),
+        ("🎙️", "Голосовой онлайн", format_duration_minutes(voice_minutes)),
+        ("🏆", "Топ по онлайну", f"{rank or '-'} место"),
+        ("⭐", "Любимая комната", fav_name),
     ]
     positions = [(348, 154), (570, 154), (348, 244), (570, 244)]
-    for (icon_kind, label, value), (x, y) in zip(stat_cards, positions):
+    for (emoji, label, value), (x, y) in zip(stat_cards, positions):
         glass_rect((x, y, x + 205, y + 70), radius=18, alpha=30, outline=16)
         draw.rounded_rectangle((x + 12, y + 21, x + 42, y + 51), radius=11, fill=(120, 175, 220, 60))
-        draw_profile_icon(image, draw, icon_kind, (x + 15, y + 24, x + 39, y + 48))
+        draw_rich_text(image, draw, (x + 16, y + 24), emoji, tiny_font, fill=(255, 255, 255, 235))
         draw.text((x + 54, y + 14), label, font=tiny_font, fill=(205, 214, 235, 155))
-        draw.text((x + 54, y + 36), truncate_text(value, 14), font=medium_bold, fill=(255, 255, 255, 238))
+        draw_rich_text(image, draw, (x + 54, y + 36), truncate_text(value, 14), medium_bold, fill=(255, 255, 255, 238))
 
     # Progress / level milestones
     level_dots_y = 322
@@ -1575,12 +1572,12 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
             pair_sub = truncate_text(other.display_name if other else str(other_id), 15)
             break
 
-    right_rows = [("pair", pair_text, pair_sub), ("clan", "Клана нет", "Пусто")]
+    right_rows = [("💕", pair_text, pair_sub), ("👑", "Клана нет", "Пусто")]
     ry = 395
-    for icon_kind, main, sub in right_rows:
+    for emoji, main, sub in right_rows:
         draw.ellipse((850, ry + 10, 892, ry + 52), fill=(255, 255, 255, 34), outline=(255, 255, 255, 24), width=1)
-        draw_profile_icon(image, draw, icon_kind, (858, ry + 18, 884, ry + 44))
-        draw.text((908, ry + 12), main, font=medium_bold, fill=(255, 255, 255, 240))
+        draw_rich_text(image, draw, (858, ry + 18), emoji, small_font, fill=(255, 255, 255, 210))
+        draw_rich_text(image, draw, (908, ry + 12), main, medium_bold, fill=(255, 255, 255, 240))
         draw.text((908, ry + 40), sub, font=tiny_font, fill=(210, 220, 235, 145))
         ry += 64
 
