@@ -1454,6 +1454,28 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     def pill(box: tuple[int, int, int, int], alpha: int = 42) -> None:
         draw.rounded_rectangle(box, radius=(box[3] - box[1]) // 2, fill=(255, 255, 255, alpha), outline=(255, 255, 255, 18), width=1)
 
+    def draw_centered_emoji(box: tuple[int, int, int, int], emoji_text: str, size: int = 24) -> None:
+        """Рисует именно emoji по центру. Сначала Twemoji-картинка, потом fallback через шрифт."""
+        x1, y1, x2, y2 = box
+        emoji_text = str(emoji_text)
+        emoji_size = min(size, x2 - x1, y2 - y1)
+
+        emoji_image = _load_emoji_image(emoji_text, emoji_size)
+        if emoji_image is not None:
+            px = int(x1 + ((x2 - x1) - emoji_size) / 2)
+            py = int(y1 + ((y2 - y1) - emoji_size) / 2)
+            image.alpha_composite(emoji_image, (px, py))
+            return
+
+        # Если Twemoji не скачалась, пробуем рисовать именно emoji текстом, без замены на символы.
+        emoji_font = load_font(max(emoji_size - 2, 16), False)
+        bbox = draw.textbbox((0, 0), emoji_text, font=emoji_font)
+        sw = bbox[2] - bbox[0]
+        sh = bbox[3] - bbox[1]
+        px = x1 + ((x2 - x1) - sw) / 2 - bbox[0]
+        py = y1 + ((y2 - y1) - sh) / 2 - bbox[1]
+        draw.text((px, py), emoji_text, font=emoji_font, fill=(255, 255, 255, 255))
+
     glass_rect((18, 18, width - 18, height - 18), radius=34, alpha=28, outline=34)
     glass_rect((50, 56, 300, height - 62), radius=28, alpha=34, outline=24)
     glass_rect((320, 56, 808, 356), radius=24, alpha=32, outline=20)
@@ -1496,7 +1518,7 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     left_chips = [("🍑", coin_text), ("🔥", ach_text)]
     for emoji, value in left_chips:
         pill((78, chip_y, 270, chip_y + 50), alpha=42)
-        draw_rich_text(image, draw, (98, chip_y + 12), emoji, text_font, fill=(255, 255, 255, 235))
+        draw_centered_emoji((88, chip_y + 6, 132, chip_y + 46), emoji, size=28)
         val_w, _ = rich_text_size(draw, value, medium_bold)
         draw_rich_text(image, draw, (248 - val_w, chip_y + 12), value, medium_bold, fill=(255, 255, 255, 245))
         chip_y += 62
@@ -1536,7 +1558,7 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     for (emoji, label, value), (x, y) in zip(stat_cards, positions):
         glass_rect((x, y, x + 205, y + 70), radius=18, alpha=30, outline=16)
         draw.rounded_rectangle((x + 12, y + 21, x + 42, y + 51), radius=11, fill=(120, 175, 220, 60))
-        draw_rich_text(image, draw, (x + 16, y + 24), emoji, tiny_font, fill=(255, 255, 255, 235))
+        draw_centered_emoji((x + 12, y + 21, x + 42, y + 51), emoji, size=22)
         draw.text((x + 54, y + 14), label, font=tiny_font, fill=(205, 214, 235, 155))
         draw_rich_text(image, draw, (x + 54, y + 36), truncate_text(value, 14), medium_bold, fill=(255, 255, 255, 238))
 
@@ -1576,7 +1598,7 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     ry = 395
     for emoji, main, sub in right_rows:
         draw.ellipse((850, ry + 10, 892, ry + 52), fill=(255, 255, 255, 34), outline=(255, 255, 255, 24), width=1)
-        draw_rich_text(image, draw, (858, ry + 18), emoji, small_font, fill=(255, 255, 255, 210))
+        draw_centered_emoji((850, ry + 10, 892, ry + 52), emoji, size=26)
         draw_rich_text(image, draw, (908, ry + 12), main, medium_bold, fill=(255, 255, 255, 240))
         draw.text((908, ry + 40), sub, font=tiny_font, fill=(210, 220, 235, 145))
         ry += 64
