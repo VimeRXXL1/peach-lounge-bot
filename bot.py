@@ -296,6 +296,9 @@ class Database:
                     balance INTEGER NOT NULL DEFAULT 0,
                     background TEXT NOT NULL DEFAULT 'default',
                     voice_minutes INTEGER NOT NULL DEFAULT 0,
+                    message_count INTEGER NOT NULL DEFAULT 0,
+                    case_opened INTEGER NOT NULL DEFAULT 0,
+                    daily_count INTEGER NOT NULL DEFAULT 0,
                     PRIMARY KEY (guild_id, user_id)
                 )
                 """
@@ -336,10 +339,54 @@ class Database:
                 )
                 """
             )
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS transactions (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    amount INTEGER NOT NULL,
+                    category TEXT NOT NULL,
+                    reason TEXT NOT NULL,
+                    created_at INTEGER NOT NULL
+                )
+                """
+            )
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS voice_channel_stats (
+                    guild_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    channel_id INTEGER NOT NULL,
+                    minutes INTEGER NOT NULL DEFAULT 0,
+                    PRIMARY KEY (guild_id, user_id, channel_id)
+                )
+                """
+            )
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS profile_items (
+                    guild_id INTEGER NOT NULL,
+                    user_id INTEGER NOT NULL,
+                    item_type TEXT NOT NULL,
+                    item_key TEXT NOT NULL,
+                    equipped INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL,
+                    PRIMARY KEY (guild_id, user_id, item_type, item_key)
+                )
+                """
+            )
 
-        if not self._column_exists("users", "voice_minutes"):
-            with self.conn:
-                self.conn.execute("ALTER TABLE users ADD COLUMN voice_minutes INTEGER NOT NULL DEFAULT 0")
+        user_extra_columns = {
+            "voice_minutes": "ALTER TABLE users ADD COLUMN voice_minutes INTEGER NOT NULL DEFAULT 0",
+            "message_count": "ALTER TABLE users ADD COLUMN message_count INTEGER NOT NULL DEFAULT 0",
+            "case_opened": "ALTER TABLE users ADD COLUMN case_opened INTEGER NOT NULL DEFAULT 0",
+            "daily_count": "ALTER TABLE users ADD COLUMN daily_count INTEGER NOT NULL DEFAULT 0",
+        }
+        with self.conn:
+            for column, sql in user_extra_columns.items():
+                if not self._column_exists("users", column):
+                    self.conn.execute(sql)
 
     def ensure_user(self, guild_id: int, user_id: int) -> None:
         with self.conn:
@@ -356,8 +403,59 @@ class Database:
         ).fetchone()
         return dict(row)
 
+    def add_transaction(self, guild_id: int, user_id: int, amount: int, category: str, reason: str) -> None:
+        self.ensure_user(guild_id, user_id)
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT INTO transactions (guild_id, user_id, amount, category, reason, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (guild_id, user_id, int(amount), str(category)[:60], str(reason)[:240], int(time.time())),
+            )
+
+    def get_transactions(self, guild_id: int, user_id: int, limit: int = 30) -> list[dict[str, Any]]:
+        rows = self.conn.execute(
+            """
+            SELECT * FROM transactions
+            WHERE guild_id = ? AND user_id = ?
+            ORDER BY id DESC
+            LIMIT ?
+            """,
+            (guild_id, user_id, int(limit)),
+        ).fetchall()
+        return [dict(row) for row in rows]
+
+    def transaction_summary(self, guild_id: int, user_id: int) -> dict[str, Any]:
+        rows = self.conn.execute(
+            """
+            SELECT category,
+                   SUM(CASE WHEN amount > 0 THEN amount ELSE 0 END) AS income,
+                   SUM(CASE WHEN amount < 0 THEN -amount ELSE 0 END) AS expense
+            FROM transactions
+            WHERE guild_id = ? AND user_id = ?
+            GROUP BY category
+            """,
+            (guild_id, user_id),
+        ).fetchall()
+        total_income = sum(int(row["income"] or 0) for row in rows)
+        total_expense = sum(int(row["expense"] or 0) for row in rows)
+        return {
+            "rows": [dict(row) for row in rows],
+            "total_income": total_income,
+            "total_expense": total_expense,
+            "turnover": total_income + total_expense,
+        }
+
     def add_voice_reward(
-        self, guild_id: int, user_id: int, xp: int, coins: int, minutes: int, new_level: int
+        self,
+        guild_id: int,
+        user_id: int,
+        xp: int,
+        coins: int,
+        minutes: int,
+        new_level: int,
+        channel_id: Optional[int] = None,
     ) -> dict[str, Any]:
         self.ensure_user(guild_id, user_id)
         with self.conn:
@@ -372,15 +470,29 @@ class Database:
                 """,
                 (xp, coins, minutes, new_level, guild_id, user_id),
             )
+            if channel_id is not None and minutes > 0:
+                self.conn.execute(
+                    """
+                    INSERT INTO voice_channel_stats (guild_id, user_id, channel_id, minutes)
+                    VALUES (?, ?, ?, ?)
+                    ON CONFLICT(guild_id, user_id, channel_id)
+                    DO UPDATE SET minutes = minutes + excluded.minutes
+                    """,
+                    (guild_id, user_id, int(channel_id), int(minutes)),
+                )
+        if coins:
+            self.add_transaction(guild_id, user_id, coins, "voice", f"Голосовой онлайн: {minutes} мин.")
         return self.get_user(guild_id, user_id)
 
-    def add_balance(self, guild_id: int, user_id: int, amount: int) -> dict[str, Any]:
+    def add_balance(self, guild_id: int, user_id: int, amount: int, category: str = "manual", reason: str = "Изменение баланса") -> dict[str, Any]:
         self.ensure_user(guild_id, user_id)
         with self.conn:
             self.conn.execute(
                 "UPDATE users SET balance = MAX(balance + ?, 0) WHERE guild_id = ? AND user_id = ?",
                 (amount, guild_id, user_id),
             )
+        if amount:
+            self.add_transaction(guild_id, user_id, amount, category, reason)
         return self.get_user(guild_id, user_id)
 
     def set_background(self, guild_id: int, user_id: int, background: str) -> None:
@@ -427,6 +539,65 @@ class Database:
             (guild_id, user_id),
         ).fetchone()
         return int(row[0]) if row else 0
+
+    def increment_messages(self, guild_id: int, user_id: int, amount: int = 1) -> dict[str, Any]:
+        self.ensure_user(guild_id, user_id)
+        with self.conn:
+            self.conn.execute(
+                "UPDATE users SET message_count = message_count + ? WHERE guild_id = ? AND user_id = ?",
+                (int(amount), guild_id, user_id),
+            )
+        return self.get_user(guild_id, user_id)
+
+    def get_purchases(self, guild_id: int, user_id: int, item_type: Optional[str] = None) -> list[dict[str, Any]]:
+        if item_type is None:
+            rows = self.conn.execute(
+                "SELECT * FROM purchases WHERE guild_id = ? AND user_id = ? ORDER BY purchased_at DESC",
+                (guild_id, user_id),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM purchases WHERE guild_id = ? AND user_id = ? AND item_type = ? ORDER BY purchased_at DESC",
+                (guild_id, user_id, item_type),
+            ).fetchall()
+        return [dict(row) for row in rows]
+
+    def favorite_voice_channel(self, guild_id: int, user_id: int) -> Optional[dict[str, Any]]:
+        row = self.conn.execute(
+            """
+            SELECT channel_id, minutes
+            FROM voice_channel_stats
+            WHERE guild_id = ? AND user_id = ?
+            ORDER BY minutes DESC
+            LIMIT 1
+            """,
+            (guild_id, user_id),
+        ).fetchone()
+        return dict(row) if row else None
+
+    def grant_profile_item(self, guild_id: int, user_id: int, item_type: str, item_key: str, equipped: int = 0) -> None:
+        self.ensure_user(guild_id, user_id)
+        with self.conn:
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO profile_items (guild_id, user_id, item_type, item_key, equipped, created_at)
+                VALUES (?, ?, ?, ?, ?, ?)
+                """,
+                (guild_id, user_id, item_type, item_key, int(equipped), int(time.time())),
+            )
+
+    def get_profile_items(self, guild_id: int, user_id: int, item_type: Optional[str] = None) -> list[dict[str, Any]]:
+        if item_type is None:
+            rows = self.conn.execute(
+                "SELECT * FROM profile_items WHERE guild_id = ? AND user_id = ? ORDER BY created_at DESC",
+                (guild_id, user_id),
+            ).fetchall()
+        else:
+            rows = self.conn.execute(
+                "SELECT * FROM profile_items WHERE guild_id = ? AND user_id = ? AND item_type = ? ORDER BY created_at DESC",
+                (guild_id, user_id, item_type),
+            ).fetchall()
+        return [dict(row) for row in rows]
 
     def add_warning(self, guild_id: int, user_id: int, moderator_id: int, reason: str) -> int:
         with self.conn:
@@ -760,7 +931,8 @@ class ServerBot(commands.Bot):
         before = self.db.get_user(member.guild.id, member.id)
         total_xp = before["xp"] + xp
         new_level = self.level_for_xp(total_xp)
-        after = self.db.add_voice_reward(member.guild.id, member.id, xp, coins, minutes, new_level)
+        channel_id = member.voice.channel.id if member.voice and member.voice.channel else None
+        after = self.db.add_voice_reward(member.guild.id, member.id, xp, coins, minutes, new_level, channel_id=channel_id)
         await self.sync_level_roles(member, after["level"])
         if after["level"] > before["level"]:
             await self.send_levelup_message(member, before["level"], after["level"])
@@ -903,6 +1075,11 @@ class ServerBot(commands.Bot):
         if settings.get("image_url"):
             embed.set_image(url=str(settings.get("image_url")))
         await channel.send(content=member.mention, embed=embed)
+
+    async def on_message(self, message: discord.Message) -> None:
+        if message.guild is not None and not message.author.bot:
+            self.db.increment_messages(message.guild.id, message.author.id, 1)
+        await self.process_commands(message)
 
 
 bot = ServerBot()
@@ -1243,6 +1420,458 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     return output
 
 
+
+# ------------------------- PROFILE SYSTEM V2 -------------------------
+ACHIEVEMENT_DEFS: list[dict[str, Any]] = [
+    {"key": "messages_1", "title": "Первое сообщение", "desc": "Написать 1 сообщение", "metric": "message_count", "target": 1, "emoji": "💬"},
+    {"key": "messages_100", "title": "Разговорчивый персик", "desc": "Написать 100 сообщений", "metric": "message_count", "target": 100, "emoji": "💬"},
+    {"key": "messages_500", "title": "Душа чата", "desc": "Написать 500 сообщений", "metric": "message_count", "target": 500, "emoji": "📝"},
+    {"key": "voice_60", "title": "Первый час в ГС", "desc": "Провести 1 час в голосовых", "metric": "voice_minutes", "target": 60, "emoji": "🎙️"},
+    {"key": "voice_600", "title": "Ночной голос", "desc": "Провести 10 часов в голосовых", "metric": "voice_minutes", "target": 600, "emoji": "🌙"},
+    {"key": "voice_6000", "title": "Voice Legend", "desc": "Провести 100 часов в голосовых", "metric": "voice_minutes", "target": 6000, "emoji": "🏆"},
+    {"key": "level_5", "title": "Пятый уровень", "desc": "Достигнуть 5 уровня", "metric": "level", "target": 5, "emoji": "🍑"},
+    {"key": "level_25", "title": "Стабильный актив", "desc": "Достигнуть 25 уровня", "metric": "level", "target": 25, "emoji": "🔮"},
+    {"key": "background_1", "title": "Первый стиль", "desc": "Купить или получить 1 фон", "metric": "backgrounds", "target": 1, "emoji": "🎨"},
+    {"key": "background_5", "title": "Коллекционер фонов", "desc": "Собрать 5 фонов", "metric": "backgrounds", "target": 5, "emoji": "🖼️"},
+    {"key": "relation_1", "title": "Не одинокий персик", "desc": "Создать первую связь", "metric": "relationships", "target": 1, "emoji": "💞"},
+    {"key": "case_5", "title": "Любитель кейсов", "desc": "Открыть 5 кейсов", "metric": "case_opened", "target": 5, "emoji": "🎁"},
+]
+
+
+def user_achievement_metrics(member: discord.Member) -> dict[str, int]:
+    row = bot.db.get_user(member.guild.id, member.id)
+    purchases = bot.db.get_purchases(member.guild.id, member.id, "background")
+    relations = bot.db.relationships_for_member(member.guild.id, member.id)
+    return {
+        "message_count": int(row.get("message_count", 0)),
+        "voice_minutes": int(row.get("voice_minutes", 0)),
+        "level": int(row.get("level", 0)),
+        "backgrounds": len(purchases),
+        "relationships": len(relations),
+        "case_opened": int(row.get("case_opened", 0)),
+    }
+
+
+def achievement_progress(member: discord.Member) -> list[dict[str, Any]]:
+    metrics = user_achievement_metrics(member)
+    result = []
+    for item in ACHIEVEMENT_DEFS:
+        value = int(metrics.get(item["metric"], 0))
+        target = int(item["target"])
+        result.append({**item, "value": value, "done": value >= target, "percent": min(value / max(target, 1), 1)})
+    return result
+
+
+def make_ui_canvas(width: int = 1200, height: int = 620, theme: str = "night", colors: Optional[list[str]] = None) -> Image.Image:
+    colors = colors or ["#10141f", "#243B55"]
+    image = draw_theme_background((width, height), theme, colors)
+    overlay = Image.new("RGBA", (width, height), (0, 0, 0, 40))
+    image.alpha_composite(overlay)
+    return image
+
+
+def draw_glass(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], radius: int = 24, fill=(255, 255, 255, 26)) -> None:
+    draw.rounded_rectangle(box, radius=radius, fill=fill, outline=(255, 255, 255, 35), width=1)
+
+
+def create_achievement_screen(member: discord.Member, page: int = 0) -> io.BytesIO:
+    width, height = 1200, 720
+    image = make_ui_canvas(width, height, "night", ["#0f172a", "#1e293b"])
+    draw = ImageDraw.Draw(image)
+    title_font = load_font(36, True)
+    text_font = load_font(22)
+    small_font = load_font(18)
+    tiny_font = load_font(15)
+
+    draw_text_with_shadow(draw, (42, 34), "🏆 Достижения Peach Lounge", title_font)
+    metrics = achievement_progress(member)
+    done_count = sum(1 for x in metrics if x["done"])
+    draw.text((46, 82), f"{member.display_name} • выполнено {done_count}/{len(metrics)}", font=text_font, fill=(225, 232, 255, 220))
+
+    per_page = 5
+    max_page = max(0, math.ceil(len(metrics) / per_page) - 1)
+    page = max(0, min(page, max_page))
+    items = metrics[page * per_page : (page + 1) * per_page]
+
+    y = 128
+    for item in items:
+        draw_glass(draw, (40, y, width - 40, y + 100), radius=22, fill=(255, 255, 255, 24))
+        draw_rich_text(image, draw, (68, y + 20), item["emoji"], title_font, fill=(255, 255, 255, 255))
+        draw.text((124, y + 18), item["title"], font=text_font, fill=(255, 255, 255, 242))
+        draw.text((124, y + 48), item["desc"], font=small_font, fill=(210, 220, 255, 205))
+        progress_text = "Макс. уровень" if item["done"] else f"{item['value']}/{item['target']}"
+        draw.text((width - 270, y + 24), progress_text, font=small_font, fill=(255, 255, 255, 235))
+        bar_x, bar_y, bar_w, bar_h = 124, y + 76, width - 420, 12
+        draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=6, fill=(10, 12, 20, 175))
+        fill_w = int(bar_w * float(item["percent"]))
+        if fill_w:
+            draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + bar_h), radius=6, fill=(255, 150, 190, 230))
+        y += 112
+
+    draw.text((width // 2 - 70, height - 54), f"Страница {page + 1}/{max_page + 1}", font=small_font, fill=(230, 236, 255, 210))
+    out = io.BytesIO()
+    image.save(out, format="PNG")
+    out.seek(0)
+    return out
+
+
+def create_economy_screen(member: discord.Member, page: int = 0) -> io.BytesIO:
+    width, height = 1200, 650
+    image = make_ui_canvas(width, height, "cyber", ["#0f172a", "#111827"])
+    draw = ImageDraw.Draw(image)
+    title_font = load_font(34, True)
+    text_font = load_font(22)
+    small_font = load_font(17)
+
+    row = bot.db.get_user(member.guild.id, member.id)
+    summary = bot.db.transaction_summary(member.guild.id, member.id)
+    transactions = bot.db.get_transactions(member.guild.id, member.id, 80)
+
+    draw_text_with_shadow(draw, (42, 34), "📉 Анализ поступлений и расходов", title_font)
+    draw.text((46, 78), f"{member.display_name} • баланс {int(row.get('balance', 0)):,} 🪙".replace(",", " "), font=text_font, fill=(225, 232, 255, 220))
+
+    draw_glass(draw, (42, 118, 355, 300), radius=24)
+    draw.text((70, 148), "За всё время", font=small_font, fill=(210, 220, 255, 200))
+    draw.text((70, 178), f"Получено: {summary['total_income']:,} 🪙".replace(",", " "), font=text_font, fill=(255, 255, 255, 235))
+    draw.text((70, 214), f"Потрачено: {summary['total_expense']:,} 🪙".replace(",", " "), font=text_font, fill=(255, 255, 255, 235))
+    draw.text((70, 250), f"Оборот: {summary['turnover']:,} 🪙".replace(",", " "), font=text_font, fill=(255, 255, 255, 235))
+
+    draw_glass(draw, (380, 118, width - 42, 300), radius=24)
+    draw.text((410, 146), "Категории", font=text_font, fill=(255, 255, 255, 235))
+    cats = summary["rows"]
+    total = max(summary["turnover"], 1)
+    y = 184
+    for cat in cats[:5]:
+        value = int(cat.get("income") or 0) + int(cat.get("expense") or 0)
+        percent = value / total
+        label = str(cat.get("category", "other"))
+        draw.text((410, y), label, font=small_font, fill=(225, 232, 255, 220))
+        draw.rounded_rectangle((560, y + 4, 1010, y + 18), radius=7, fill=(20, 22, 34, 180))
+        draw.rounded_rectangle((560, y + 4, 560 + int(450 * percent), y + 18), radius=7, fill=(120, 130, 255, 230))
+        draw.text((1030, y - 2), f"{value:,}".replace(",", " "), font=small_font, fill=(245, 248, 255, 230))
+        y += 30
+
+    draw_glass(draw, (42, 326, width - 42, height - 42), radius=24)
+    draw.text((70, 356), "Последние транзакции", font=text_font, fill=(255, 255, 255, 238))
+    per_page = 7
+    max_page = max(0, math.ceil(len(transactions) / per_page) - 1)
+    page = max(0, min(page, max_page))
+    y = 398
+    for tx in transactions[page * per_page : (page + 1) * per_page]:
+        amount = int(tx["amount"])
+        sign = "+" if amount > 0 else ""
+        created = time.strftime("%d.%m %H:%M", time.localtime(int(tx["created_at"])))
+        draw.text((74, y), created, font=small_font, fill=(180, 190, 215, 200))
+        draw.text((190, y), str(tx["category"]), font=small_font, fill=(220, 230, 255, 210))
+        draw.text((360, y), truncate_text(str(tx["reason"]), 55), font=small_font, fill=(235, 240, 255, 220))
+        draw.text((1000, y), f"{sign}{amount:,} 🪙".replace(",", " "), font=small_font, fill=(255, 255, 255, 235))
+        y += 32
+    if not transactions:
+        draw.text((74, 410), "Пока нет транзакций. Новые начисления и покупки появятся тут.", font=small_font, fill=(235, 240, 255, 220))
+    draw.text((width // 2 - 70, height - 28), f"Страница {page + 1}/{max_page + 1}", font=small_font, fill=(230, 236, 255, 210))
+    out = io.BytesIO()
+    image.save(out, format="PNG")
+    out.seek(0)
+    return out
+
+
+def background_items() -> list[tuple[str, dict[str, Any]]]:
+    return list(bot.config.get("profile_backgrounds", {}).items())
+
+
+def create_shop_screen(member: discord.Member, page: int = 0) -> io.BytesIO:
+    width, height = 1200, 650
+    image = make_ui_canvas(width, height, "anime_city", ["#0b1020", "#172033"])
+    draw = ImageDraw.Draw(image)
+    title_font = load_font(34, True)
+    text_font = load_font(22)
+    small_font = load_font(17)
+    tiny_font = load_font(14)
+
+    row = bot.db.get_user(member.guild.id, member.id)
+    purchased = {p["item_key"] for p in bot.db.get_purchases(member.guild.id, member.id, "background")}
+    purchased.add("default")
+    items = background_items()
+    per_page = 6
+    max_page = max(0, math.ceil(len(items) / per_page) - 1)
+    page = max(0, min(page, max_page))
+
+    draw_text_with_shadow(draw, (42, 34), "🛒 Магазин фонов", title_font)
+    draw.text((930, 42), f"{int(row.get('balance', 0)):,} 🪙".replace(",", " "), font=text_font, fill=(255, 255, 255, 235))
+
+    cards = items[page * per_page : (page + 1) * per_page]
+    positions = [(42, 112), (420, 112), (798, 112), (42, 338), (420, 338), (798, 338)]
+    for (key, data), (x, y) in zip(cards, positions):
+        theme = str(data.get("theme", key))
+        colors = data.get("colors", ["#23272A", "#5865F2"])
+        card_bg = draw_theme_background((320, 160), theme, colors).resize((320, 160))
+        dark = Image.new("RGBA", (320, 160), (0, 0, 0, 80))
+        card_bg.alpha_composite(dark)
+        mask = Image.new("L", (320, 160), 0)
+        ImageDraw.Draw(mask).rounded_rectangle((0, 0, 320, 160), radius=24, fill=255)
+        image.paste(card_bg, (x, y), mask)
+        draw.rounded_rectangle((x, y, x + 320, y + 160), radius=24, outline=(255, 255, 255, 35), width=1)
+        draw.text((x + 20, y + 92), str(data.get("name", key))[:24], font=text_font, fill=(255, 255, 255, 240))
+        price = int(data.get("price", 0))
+        status = "Куплено" if key in purchased else ("Бесплатно" if price <= 0 else f"{price:,} 🪙".replace(",", " "))
+        draw.text((x + 20, y + 124), status, font=small_font, fill=(230, 236, 255, 220))
+        if row.get("background") == key:
+            draw.rounded_rectangle((x + 205, y + 16, x + 300, y + 44), radius=14, fill=(90, 220, 150, 120))
+            draw.text((x + 220, y + 21), "Активен", font=tiny_font, fill=(255, 255, 255, 240))
+
+    draw.text((width // 2 - 75, height - 42), f"Страница {page + 1}/{max_page + 1}", font=small_font, fill=(230, 236, 255, 210))
+    out = io.BytesIO()
+    image.save(out, format="PNG")
+    out.seek(0)
+    return out
+
+
+def create_customization_screen(member: discord.Member) -> io.BytesIO:
+    width, height = 560, 320
+    image = make_ui_canvas(width, height, "sakura", ["#1f1025", "#38213f"])
+    draw = ImageDraw.Draw(image)
+    title_font = load_font(28, True)
+    text_font = load_font(20)
+    small_font = load_font(16)
+    draw_glass(draw, (20, 20, width - 20, height - 20), radius=24)
+    draw.text((42, 44), "🎨 Кастомизация профиля", font=title_font, fill=(255, 255, 255, 245))
+    draw.text((42, 98), f"{member.display_name}, выбери раздел ниже.", font=text_font, fill=(225, 232, 255, 220))
+    lines = ["• Магазин фонов", "• Инвентарь купленных фонов", "• Скоро: рамки, бейджи, титулы"]
+    y = 150
+    for line in lines:
+        draw.text((50, y), line, font=small_font, fill=(235, 240, 255, 220))
+        y += 32
+    out = io.BytesIO()
+    image.save(out, format="PNG")
+    out.seek(0)
+    return out
+
+
+class OwnerOnlyView(discord.ui.View):
+    def __init__(self, owner_id: int, timeout: float = 600):
+        super().__init__(timeout=timeout)
+        self.owner_id = owner_id
+
+    async def interaction_check(self, interaction: discord.Interaction) -> bool:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Это меню открывал другой участник.", ephemeral=True)
+            return False
+        return True
+
+
+class ProfileMainView(OwnerOnlyView):
+    def __init__(self, owner_id: int, target_id: int):
+        super().__init__(owner_id)
+        self.target_id = target_id
+
+    def get_target(self, interaction: discord.Interaction) -> Optional[discord.Member]:
+        if interaction.guild is None:
+            return None
+        return interaction.guild.get_member(self.target_id)
+
+    @discord.ui.button(label="Кастомизация", emoji="🎨", style=discord.ButtonStyle.secondary)
+    async def customization(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        member = self.get_target(interaction)
+        if member is None:
+            await interaction.response.send_message("Участник не найден.", ephemeral=True)
+            return
+        file = discord.File(create_customization_screen(member), filename="customization.png")
+        await interaction.response.send_message(file=file, view=CustomizationView(interaction.user.id, member.id), ephemeral=True)
+
+    @discord.ui.button(label="Достижения", emoji="🏆", style=discord.ButtonStyle.secondary)
+    async def achievements(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        member = self.get_target(interaction)
+        if member is None:
+            await interaction.response.send_message("Участник не найден.", ephemeral=True)
+            return
+        file = discord.File(create_achievement_screen(member, 0), filename="achievements.png")
+        await interaction.response.send_message(file=file, view=AchievementsView(interaction.user.id, member.id, 0), ephemeral=True)
+
+    @discord.ui.button(label="Расходы", emoji="📉", style=discord.ButtonStyle.secondary)
+    async def expenses(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        member = self.get_target(interaction)
+        if member is None:
+            await interaction.response.send_message("Участник не найден.", ephemeral=True)
+            return
+        file = discord.File(create_economy_screen(member, 0), filename="economy.png")
+        await interaction.response.send_message(file=file, view=EconomyView(interaction.user.id, member.id, 0), ephemeral=True)
+
+    @discord.ui.button(label="Магазин фонов", emoji="🛒", style=discord.ButtonStyle.primary)
+    async def shop_button(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        member = self.get_target(interaction)
+        if member is None:
+            await interaction.response.send_message("Участник не найден.", ephemeral=True)
+            return
+        file = discord.File(create_shop_screen(member, 0), filename="background_shop.png")
+        await interaction.response.send_message(file=file, view=BackgroundShopView(interaction.user.id, member.id, 0), ephemeral=True)
+
+
+class CustomizationView(OwnerOnlyView):
+    def __init__(self, owner_id: int, target_id: int):
+        super().__init__(owner_id)
+        self.target_id = target_id
+
+    @discord.ui.button(label="Магазин фонов", emoji="🛒", style=discord.ButtonStyle.primary)
+    async def shop(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        member = interaction.guild.get_member(self.target_id) if interaction.guild else None
+        if member is None:
+            await interaction.response.send_message("Участник не найден.", ephemeral=True)
+            return
+        file = discord.File(create_shop_screen(member, 0), filename="background_shop.png")
+        await interaction.response.send_message(file=file, view=BackgroundShopView(interaction.user.id, member.id, 0), ephemeral=True)
+
+    @discord.ui.button(label="Инвентарь фонов", emoji="🎒", style=discord.ButtonStyle.secondary)
+    async def inventory(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        member = interaction.guild.get_member(self.target_id) if interaction.guild else None
+        if member is None:
+            await interaction.response.send_message("Участник не найден.", ephemeral=True)
+            return
+        purchases = bot.db.get_purchases(member.guild.id, member.id, "background")
+        owned = ["default"] + [p["item_key"] for p in purchases]
+        backgrounds = bot.config.get("profile_backgrounds", {})
+        lines = []
+        for key in owned[:25]:
+            data = backgrounds.get(key, {"name": key})
+            marker = "✅" if bot.db.get_user(member.guild.id, member.id).get("background") == key else "▫️"
+            lines.append(f"{marker} `{key}` — {data.get('name', key)}")
+        embed = discord.Embed(title="🎒 Инвентарь фонов", description="\n".join(lines) if lines else "Пока пусто.", color=discord.Color.blurple())
+        await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+class PagedImageView(OwnerOnlyView):
+    def __init__(self, owner_id: int, target_id: int, page: int = 0):
+        super().__init__(owner_id)
+        self.target_id = target_id
+        self.page = page
+
+    def get_member(self, interaction: discord.Interaction) -> Optional[discord.Member]:
+        return interaction.guild.get_member(self.target_id) if interaction.guild else None
+
+    async def redraw(self, interaction: discord.Interaction) -> None:
+        raise NotImplementedError
+
+    @discord.ui.button(label="◀", style=discord.ButtonStyle.secondary)
+    async def prev_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.page = max(0, self.page - 1)
+        await self.redraw(interaction)
+
+    @discord.ui.button(label="▶", style=discord.ButtonStyle.secondary)
+    async def next_page(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        self.page += 1
+        await self.redraw(interaction)
+
+
+class AchievementsView(PagedImageView):
+    async def redraw(self, interaction: discord.Interaction) -> None:
+        member = self.get_member(interaction)
+        if member is None:
+            await interaction.response.send_message("Участник не найден.", ephemeral=True)
+            return
+        max_page = max(0, math.ceil(len(ACHIEVEMENT_DEFS) / 5) - 1)
+        self.page = max(0, min(self.page, max_page))
+        file = discord.File(create_achievement_screen(member, self.page), filename="achievements.png")
+        await interaction.response.edit_message(attachments=[file], view=self)
+
+
+class EconomyView(PagedImageView):
+    async def redraw(self, interaction: discord.Interaction) -> None:
+        member = self.get_member(interaction)
+        if member is None:
+            await interaction.response.send_message("Участник не найден.", ephemeral=True)
+            return
+        tx_count = len(bot.db.get_transactions(member.guild.id, member.id, 80))
+        max_page = max(0, math.ceil(tx_count / 7) - 1)
+        self.page = max(0, min(self.page, max_page))
+        file = discord.File(create_economy_screen(member, self.page), filename="economy.png")
+        await interaction.response.edit_message(attachments=[file], view=self)
+
+
+class BackgroundSelect(discord.ui.Select):
+    def __init__(self, owner_id: int, target_id: int, page: int):
+        self.owner_id = owner_id
+        self.target_id = target_id
+        self.page = page
+        items = background_items()
+        per_page = 6
+        page_items = items[page * per_page : (page + 1) * per_page]
+        options = []
+        for key, data in page_items:
+            price = int(data.get("price", 0))
+            options.append(discord.SelectOption(label=str(data.get("name", key))[:100], value=key, description=("Бесплатно" if price <= 0 else f"Цена: {price} монет")[:100]))
+        super().__init__(placeholder="Выберите понравившийся фон", min_values=1, max_values=1, options=options or [discord.SelectOption(label="Нет фонов", value="none")])
+
+    async def callback(self, interaction: discord.Interaction) -> None:
+        if interaction.user.id != self.owner_id:
+            await interaction.response.send_message("Это меню открывал другой участник.", ephemeral=True)
+            return
+        if interaction.guild is None:
+            await interaction.response.send_message("Команда работает только на сервере.", ephemeral=True)
+            return
+        member = interaction.guild.get_member(self.target_id)
+        if member is None:
+            await interaction.response.send_message("Участник не найден.", ephemeral=True)
+            return
+        key = self.values[0]
+        backgrounds = bot.config.get("profile_backgrounds", {})
+        if key not in backgrounds:
+            await interaction.response.send_message("Фон не найден.", ephemeral=True)
+            return
+        data = backgrounds[key]
+        price = int(data.get("price", 0))
+        guild_id, user_id = member.guild.id, member.id
+        if price <= 0 or bot.db.has_purchase(guild_id, user_id, "background", key):
+            bot.db.set_background(guild_id, user_id, key)
+            await interaction.response.send_message(f"Фон **{data.get('name', key)}** установлен ✅", ephemeral=True)
+            return
+        row = bot.db.get_user(guild_id, user_id)
+        if int(row.get("balance", 0)) < price:
+            await interaction.response.send_message(f"Не хватает монет. Нужно **{price} 🪙**, у тебя **{row.get('balance', 0)} 🪙**.", ephemeral=True)
+            return
+        bot.db.add_balance(guild_id, user_id, -price, "shop", f"Покупка фона: {data.get('name', key)}")
+        bot.db.add_purchase(guild_id, user_id, "background", key)
+        bot.db.set_background(guild_id, user_id, key)
+        await interaction.response.send_message(f"Куплено и установлено: **{data.get('name', key)}** за **{price} 🪙** ✅", ephemeral=True)
+
+
+class BackgroundShopView(PagedImageView):
+    def __init__(self, owner_id: int, target_id: int, page: int = 0):
+        super().__init__(owner_id, target_id, page)
+        self.rebuild_select()
+
+    def rebuild_select(self) -> None:
+        # remove old selects
+        self.clear_items()
+        self.add_item(BackgroundSelect(self.owner_id, self.target_id, self.page))
+        prev_button = discord.ui.Button(label="◀", style=discord.ButtonStyle.secondary)
+        next_button = discord.ui.Button(label="▶", style=discord.ButtonStyle.secondary)
+        async def prev_cb(interaction: discord.Interaction):
+            if interaction.user.id != self.owner_id:
+                await interaction.response.send_message("Это меню открывал другой участник.", ephemeral=True)
+                return
+            self.page = max(0, self.page - 1)
+            await self.redraw(interaction)
+        async def next_cb(interaction: discord.Interaction):
+            if interaction.user.id != self.owner_id:
+                await interaction.response.send_message("Это меню открывал другой участник.", ephemeral=True)
+                return
+            self.page += 1
+            await self.redraw(interaction)
+        prev_button.callback = prev_cb
+        next_button.callback = next_cb
+        self.add_item(prev_button)
+        self.add_item(next_button)
+
+    async def redraw(self, interaction: discord.Interaction) -> None:
+        member = self.get_member(interaction)
+        if member is None:
+            await interaction.response.send_message("Участник не найден.", ephemeral=True)
+            return
+        max_page = max(0, math.ceil(len(background_items()) / 6) - 1)
+        self.page = max(0, min(self.page, max_page))
+        self.rebuild_select()
+        file = discord.File(create_shop_screen(member, self.page), filename="background_shop.png")
+        await interaction.response.edit_message(attachments=[file], view=self)
+
 # ------------------------- HELPERS -------------------------
 def is_admin_target_valid(interaction: discord.Interaction, target: discord.Member) -> tuple[bool, str]:
     if interaction.guild is None or not isinstance(interaction.user, discord.Member):
@@ -1566,7 +2195,7 @@ async def rolepanel(interaction: discord.Interaction, channel: Optional[discord.
     await interaction.response.send_message(f"Панель отправлена в {target.mention}.", ephemeral=True)
 
 
-@bot.tree.command(name="profile", description="Показать профиль участника картинкой")
+@bot.tree.command(name="profile", description="Показать интерактивный профиль участника")
 @app_commands.guild_only()
 @app_commands.describe(member="Чей профиль показать")
 async def profile(interaction: discord.Interaction, member: Optional[discord.Member] = None) -> None:
@@ -1577,8 +2206,41 @@ async def profile(interaction: discord.Interaction, member: Optional[discord.Mem
     await interaction.response.defer()
     image = await create_profile_card(target)
     file = discord.File(image, filename="profile.png")
-    # По твоей просьбе: без текста и embed — только сама карточка.
-    await interaction.followup.send(file=file)
+    await interaction.followup.send(file=file, view=ProfileMainView(interaction.user.id, target.id))
+
+
+@bot.tree.command(name="achievements", description="Показать достижения участника")
+@app_commands.guild_only()
+@app_commands.describe(member="Чьи достижения показать")
+async def achievements(interaction: discord.Interaction, member: Optional[discord.Member] = None) -> None:
+    target = member or interaction.user
+    if not isinstance(target, discord.Member):
+        await interaction.response.send_message("Участник не найден.", ephemeral=True)
+        return
+    file = discord.File(create_achievement_screen(target, 0), filename="achievements.png")
+    await interaction.response.send_message(file=file, view=AchievementsView(interaction.user.id, target.id, 0), ephemeral=True)
+
+
+@bot.tree.command(name="transactions", description="Показать расходы и поступления участника")
+@app_commands.guild_only()
+@app_commands.describe(member="Чью экономику показать")
+async def transactions(interaction: discord.Interaction, member: Optional[discord.Member] = None) -> None:
+    target = member or interaction.user
+    if not isinstance(target, discord.Member):
+        await interaction.response.send_message("Участник не найден.", ephemeral=True)
+        return
+    file = discord.File(create_economy_screen(target, 0), filename="economy.png")
+    await interaction.response.send_message(file=file, view=EconomyView(interaction.user.id, target.id, 0), ephemeral=True)
+
+
+@bot.tree.command(name="background_shop", description="Открыть красивый магазин фонов профиля")
+@app_commands.guild_only()
+async def background_shop(interaction: discord.Interaction) -> None:
+    if not isinstance(interaction.user, discord.Member):
+        await interaction.response.send_message("Команда работает только на сервере.", ephemeral=True)
+        return
+    file = discord.File(create_shop_screen(interaction.user, 0), filename="background_shop.png")
+    await interaction.response.send_message(file=file, view=BackgroundShopView(interaction.user.id, interaction.user.id, 0), ephemeral=True)
 
 
 @bot.tree.command(name="balance", description="Показать баланс участника")
@@ -1637,7 +2299,7 @@ async def buy_background(interaction: discord.Interaction, background: str) -> N
     if row["balance"] < price:
         await interaction.response.send_message(f"Не хватает монет. Нужно **{price} 🪙**, у тебя **{row['balance']} 🪙**.", ephemeral=True)
         return
-    bot.db.add_balance(guild_id, user_id, -price)
+    bot.db.add_balance(guild_id, user_id, -price, "shop", f"Покупка фона: {data.get('name', background)}")
     bot.db.add_purchase(guild_id, user_id, "background", background)
     bot.db.set_background(guild_id, user_id, background)
     await interaction.response.send_message(f"Куплено и установлено: **{data.get('name', background)}** за **{price} 🪙**.", ephemeral=True)
@@ -1966,7 +2628,7 @@ async def givecoins(
     member: discord.Member,
     amount: app_commands.Range[int, 1, 1_000_000],
 ) -> None:
-    row = bot.db.add_balance(interaction.guild.id, member.id, int(amount))
+    row = bot.db.add_balance(interaction.guild.id, member.id, int(amount), "admin", f"Выдача монет администратором: {interaction.user}")
     await interaction.response.send_message(f"{member.mention} получил **{amount} 🪙**. Новый баланс: **{row['balance']} 🪙**.", ephemeral=True)
 
 
