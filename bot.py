@@ -3077,7 +3077,7 @@ ACHIEVEMENT_DEFS = [
     {"id": "msg_250", "emoji": "📨", "title": "Общительный персик", "desc": "Напиши 250 сообщений.", "metric": "messages", "target": 250, "icon": "messages"},
     {"id": "voice_60", "emoji": "📣", "title": "Голос есть", "desc": "Проведи 1 час в голосовых каналах.", "metric": "voice", "target": 60, "icon": "voice"},
     {"id": "voice_600", "emoji": "🌙", "title": "Ночной житель", "desc": "Проведи 10 часов в голосовых.", "metric": "voice", "target": 600, "icon": "voice"},
-    {"id": "level_5", "emoji": "❤️‍🔥", "title": "Peach Rising", "desc": "Достигни 5 уровня профиля.", "metric": "level", "target": 5, "icon": "level"},
+    {"id": "level_5", "emoji": "🧸", "title": "Peach Rising", "desc": "Достигни 5 уровня профиля.", "metric": "level", "target": 5, "icon": "level"},
     {"id": "background_1", "emoji": "🎨", "title": "Своя атмосфера", "desc": "Купи первый фон профиля.", "metric": "backgrounds", "target": 1, "icon": "backgrounds"},
     {"id": "background_4", "emoji": "🎗️", "title": "Коллекционер", "desc": "Собери 4 фона профиля.", "metric": "backgrounds", "target": 4, "icon": "backgrounds"},
     {"id": "relation_1", "emoji": "❤️", "title": "Не один", "desc": "Получи первую связь / пару на сервере.", "metric": "relations", "target": 1, "icon": "relations"},
