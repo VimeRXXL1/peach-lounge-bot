@@ -1525,11 +1525,36 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
 
     joined = member.joined_at.strftime("%d.%m.%Y") if member.joined_at else "—"
     created = member.created_at.strftime("%d.%m.%Y") if member.created_at else "—"
-    meta_lines = [("LVL", str(level)), ("TOP", f"#{rank or '-'}"), ("ГС", format_duration_minutes(voice_minutes))]
+
+    # Vibe block under avatar: no duplicated LVL/TOP/voice stats.
+    if member.joined_at:
+        now_dt = discord.utils.utcnow()
+        server_days = max(0, (now_dt - member.joined_at).days)
+        server_age = f"{server_days} дн."
+    else:
+        server_age = "—"
+
+    if voice_minutes >= 600:
+        vibe_type = "Ночной"
+    elif message_count >= 250:
+        vibe_type = "Общительный"
+    elif level >= 10:
+        vibe_type = "Активный"
+    else:
+        vibe_type = "Новый персик"
+
+    status_text = "В войсе" if member.voice and member.voice.channel else "В сети"
+
+    vibe_lines = [
+        ("🍑 Стаж", server_age),
+        ("🌙 Вайб", vibe_type),
+        ("💫 Статус", status_text),
+    ]
+
     y = 450
-    for label, value in meta_lines:
-        draw.text((82, y), label, font=tiny_font, fill=(210, 220, 255, 170))
-        draw.text((162, y - 2), value, font=small_font, fill=(255, 255, 255, 220))
+    for label, value in vibe_lines:
+        draw_rich_text(image, draw, (82, y), label, tiny_font, fill=(210, 220, 255, 175))
+        draw_rich_text(image, draw, (170, y - 2), value, small_font, fill=(255, 255, 255, 225))
         y += 32
 
     pill((458, 82, 666, 124), alpha=34)
@@ -1550,7 +1575,7 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
 
     stat_cards = [
         ("📍", "Находится в", current_voice),
-        ("🔊", "Голосовой онлайн", format_duration_minutes(voice_minutes)),
+        ("🎙️", "Голосовой онлайн", format_duration_minutes(voice_minutes)),
         ("🏆", "Топ по онлайну", f"{rank or '-'} место"),
         ("⭐", "Любимая комната", fav_name),
     ]
@@ -1716,9 +1741,35 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
         draw.text((908, ry + 40), sub, font=tiny_font, fill=(210, 220, 235, 145))
         ry += 64
 
-    draw.text((356, 548), f"Сообщения: {message_count:,}".replace(",", " "), font=tiny_font, fill=(220, 228, 255, 155))
-    draw.text((530, 548), f"Варны: {warnings_count}", font=tiny_font, fill=(220, 228, 255, 155))
-    draw.text((632, 548), f"Фон: {bg_data.get('name', background_key)}", font=tiny_font, fill=(220, 228, 255, 155))
+    # Bottom info cards: cleaner than one small gray footer line.
+    bottom_cards = [
+        ("💬", "Сообщения", f"{message_count:,}".replace(",", " ")),
+        ("⚠️", "Варны", str(warnings_count)),
+        ("🎨", "Фон", str(bg_data.get("name", background_key))),
+    ]
+    bx = 350
+    by = 526
+    card_w = 142
+    card_h = 46
+    for emoji, label, value in bottom_cards:
+        draw.rounded_rectangle(
+            (bx, by, bx + card_w, by + card_h),
+            radius=16,
+            fill=(255, 255, 255, 24),
+            outline=(255, 255, 255, 34),
+            width=1,
+        )
+        draw_centered_emoji((bx + 10, by + 10, bx + 36, by + 36), emoji, size=20)
+        draw.text((bx + 42, by + 8), label, font=tiny_font, fill=(210, 220, 245, 145))
+        draw_rich_text(
+            image,
+            draw,
+            (bx + 42, by + 25),
+            truncate_text(value, 13),
+            small_font,
+            fill=(255, 255, 255, 225),
+        )
+        bx += card_w + 14
 
     output = io.BytesIO()
     image.save(output, format="PNG")
