@@ -1562,9 +1562,18 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
         draw.text((x + 54, y + 14), label, font=tiny_font, fill=(205, 214, 235, 155))
         draw_rich_text(image, draw, (x + 54, y + 36), truncate_text(value, 14), medium_bold, fill=(255, 255, 255, 238))
 
-    # Roles strip: instead of unclear level dots, show participant roles.
-    roles_y = 322
-    roles_box = (380, roles_y, 752, roles_y + 42)
+        bar_x, bar_y, bar_w, bar_h = 356, 390, 430, 18
+    draw.text((356, 366), f"Прогресс: {xp:,}/{next_level_xp:,} XP".replace(",", " "), font=small_font, fill=(235, 240, 255, 200))
+    draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=9, fill=(10, 12, 22, 170))
+    fill_w = int(bar_w * progress)
+    if fill_w > 0:
+        accent = parse_hex_color(colors[-1] if colors else "#7C86FF", default=(124, 134, 255))
+        draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + bar_h), radius=9, fill=(*accent, 230))
+    draw.text((bar_x + bar_w + 12, bar_y - 2), f"{int(progress * 100)}%", font=tiny_font, fill=(255, 255, 255, 200))
+
+    # Roles strip under XP bar: show participant roles with emojis preserved.
+    roles_y = 422
+    roles_box = (356, roles_y, 786, roles_y + 42)
     pill(roles_box, alpha=32)
 
     visible_roles = [
@@ -1573,13 +1582,21 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     ]
     visible_roles = sorted(visible_roles, key=lambda r: r.position, reverse=True)
 
+    def clean_role_value(value: str, max_chars: int = 18) -> str:
+        # Убираем только декоративные разделители, но оставляем emoji ролей.
+        value = str(value)
+        for char in DECORATION_CHARS:
+            value = value.replace(char, " ")
+        value = " ".join(value.split()).strip()
+        return truncate_text(value or "Роль", max_chars)
+
     role_x = roles_box[0] + 10
     max_role_x = roles_box[2] - 10
     role_font = tiny_font
 
     if not visible_roles:
         empty_text = "Ролей пока нет"
-        ew, eh = _plain_text_size(draw, empty_text, role_font)
+        ew, _ = _plain_text_size(draw, empty_text, role_font)
         draw.text(
             (roles_box[0] + ((roles_box[2] - roles_box[0]) - ew) / 2, roles_y + 13),
             empty_text,
@@ -1590,10 +1607,9 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
         shown_count = 0
         hidden_count = 0
         for role in visible_roles:
-            clean_role_name = clean_display_value(role.name, 18)
-            role_text = clean_role_name
+            role_text = clean_role_value(role.name, 20)
             tw, _ = rich_text_size(draw, role_text, role_font)
-            chip_w = min(max(58, tw + 22), 132)
+            chip_w = min(max(70, tw + 22), 150)
 
             if role_x + chip_w > max_role_x:
                 hidden_count += 1
@@ -1611,7 +1627,7 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
                 image,
                 draw,
                 (role_x + 10, roles_y + 12),
-                truncate_text(role_text, 14),
+                truncate_text(role_text, 16),
                 role_font,
                 fill=(255, 255, 255, 230),
             )
@@ -1633,15 +1649,6 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
                 width=1,
             )
             draw.text((role_x + 11, roles_y + 12), more_text, font=role_font, fill=(255, 255, 255, 210))
-
-    bar_x, bar_y, bar_w, bar_h = 356, 390, 430, 18
-    draw.text((356, 366), f"Прогресс: {xp:,}/{next_level_xp:,} XP".replace(",", " "), font=small_font, fill=(235, 240, 255, 200))
-    draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=9, fill=(10, 12, 22, 170))
-    fill_w = int(bar_w * progress)
-    if fill_w > 0:
-        accent = parse_hex_color(colors[-1] if colors else "#7C86FF", default=(124, 134, 255))
-        draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + bar_h), radius=9, fill=(*accent, 230))
-    draw.text((bar_x + bar_w + 12, bar_y - 2), f"{int(progress * 100)}%", font=tiny_font, fill=(255, 255, 255, 200))
 
     # Right art panel: generated mini-art based on selected background/theme.
     draw_profile_art(image, draw, (856, 84, 1038, 270), theme, colors)
