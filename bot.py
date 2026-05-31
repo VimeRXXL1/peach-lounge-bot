@@ -3073,15 +3073,15 @@ THEME_ART_MAP = {
 
 ACHIEVEMENT_DEFS = [
     {"id": "msg_50", "emoji": "💬", "title": "Первые слова", "desc": "Напиши 50 сообщений на сервере.", "metric": "messages", "target": 50, "icon": "messages"},
-    {"id": "msg_250", "emoji": "🗣️", "title": "Общительный персик", "desc": "Напиши 250 сообщений.", "metric": "messages", "target": 250, "icon": "messages"},
-    {"id": "voice_60", "emoji": "⏱️", "title": "Голос есть", "desc": "Проведи 1 час в голосовых каналах.", "metric": "voice", "target": 60, "icon": "voice"},
+    {"id": "msg_250", "emoji": "📨", "title": "Общительный персик", "desc": "Напиши 250 сообщений.", "metric": "messages", "target": 250, "icon": "messages"},
+    {"id": "voice_60", "emoji": "📣", "title": "Голос есть", "desc": "Проведи 1 час в голосовых каналах.", "metric": "voice", "target": 60, "icon": "voice"},
     {"id": "voice_600", "emoji": "🌙", "title": "Ночной житель", "desc": "Проведи 10 часов в голосовых.", "metric": "voice", "target": 600, "icon": "voice"},
-    {"id": "level_5", "emoji": "⭐", "title": "Peach Rising", "desc": "Достигни 5 уровня профиля.", "metric": "level", "target": 5, "icon": "level"},
+    {"id": "level_5", "emoji": "❤️‍🔥", "title": "Peach Rising", "desc": "Достигни 5 уровня профиля.", "metric": "level", "target": 5, "icon": "level"},
     {"id": "background_1", "emoji": "🎨", "title": "Своя атмосфера", "desc": "Купи первый фон профиля.", "metric": "backgrounds", "target": 1, "icon": "backgrounds"},
-    {"id": "background_4", "emoji": "🖼️", "title": "Коллекционер", "desc": "Собери 4 фона профиля.", "metric": "backgrounds", "target": 4, "icon": "backgrounds"},
+    {"id": "background_4", "emoji": "🎗️", "title": "Коллекционер", "desc": "Собери 4 фона профиля.", "metric": "backgrounds", "target": 4, "icon": "backgrounds"},
     {"id": "relation_1", "emoji": "💕", "title": "Не один", "desc": "Получи первую связь / пару на сервере.", "metric": "relations", "target": 1, "icon": "relations"},
     {"id": "case_5", "emoji": "🎁", "title": "Любитель кейсов", "desc": "Открой 5 кейсов.", "metric": "cases", "target": 5, "icon": "cases"},
-    {"id": "daily_7", "emoji": "☀️", "title": "Верность серверу", "desc": "Забери daily 7 раз.", "metric": "daily", "target": 7, "icon": "daily"},
+    {"id": "daily_7", "emoji": "⚡️", "title": "Верность серверу", "desc": "Забери daily 7 раз.", "metric": "daily", "target": 7, "icon": "daily"},
     {"id": "balance_1000", "emoji": "🍑", "title": "На стиле", "desc": "Накопи 1000 валюты сервера.", "metric": "balance", "target": 1000, "icon": "balance"},
 ]
 
