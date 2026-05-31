@@ -270,6 +270,153 @@ def draw_rich_text(
         draw.text((x, y), chunk, font=font, fill=fill)
 
 
+DECORATION_CHARS = "╰╭╯╮┃│┊┆┋├┤└┘┌┐─━︱・»«›‹｜|"
+
+
+def clean_display_value(value: str, max_chars: int = 14) -> str:
+    """Убирает декоративные символы Discord-каналов, которые часто ломают шрифт в PNG."""
+    value = EMOJI_RE.sub("", str(value))
+    for char in DECORATION_CHARS:
+        value = value.replace(char, " ")
+    value = " ".join(value.split()).strip()
+    return truncate_text(value or "Комната", max_chars)
+
+
+def get_currency_symbol() -> str:
+    currency = bot.config.get("currency", {}) if "bot" in globals() else {}
+    return str(currency.get("symbol", "🍑"))
+
+
+def draw_currency_icon(image: Image.Image, draw: ImageDraw.ImageDraw, center: tuple[int, int], radius: int = 18) -> None:
+    x, y = center
+    # base coin
+    draw.ellipse((x - radius, y - radius, x + radius, y + radius), fill=(95, 170, 220, 82), outline=(190, 230, 255, 105), width=2)
+    symbol = get_currency_symbol()
+    emoji_img = _load_emoji_image(symbol, max(18, radius + 8)) if symbol else None
+    if emoji_img is not None:
+        image.alpha_composite(emoji_img, (x - emoji_img.width // 2, y - emoji_img.height // 2))
+        return
+    # vector fallback: stylized peach/token mark
+    draw.arc((x - 9, y - 11, x + 8, y + 11), start=80, end=290, fill=(225, 245, 255, 230), width=3)
+    draw.line((x + 2, y - 12, x + 10, y - 18), fill=(160, 235, 190, 220), width=3)
+    draw.ellipse((x + 7, y - 21, x + 17, y - 13), fill=(120, 235, 170, 210))
+
+
+def draw_profile_icon(image: Image.Image, draw: ImageDraw.ImageDraw, kind: str, box: tuple[int, int, int, int]) -> None:
+    """Векторные иконки без зависимости от emoji-шрифтов."""
+    x1, y1, x2, y2 = box
+    cx, cy = (x1 + x2) // 2, (y1 + y2) // 2
+    w, h = x2 - x1, y2 - y1
+    if kind == "location":
+        draw.ellipse((cx - 5, cy - 12, cx + 5, cy - 2), fill=(255, 80, 110, 230))
+        draw.polygon([(cx, cy + 12), (cx - 7, cy - 2), (cx + 7, cy - 2)], fill=(255, 80, 110, 210))
+        draw.ellipse((cx - 2, cy - 9, cx + 2, cy - 5), fill=(255, 235, 240, 235))
+    elif kind == "mic":
+        draw.rounded_rectangle((cx - 5, cy - 14, cx + 5, cy + 4), radius=5, fill=(170, 220, 255, 230))
+        draw.arc((cx - 12, cy - 4, cx + 12, cy + 15), start=0, end=180, fill=(170, 220, 255, 210), width=3)
+        draw.line((cx, cy + 15, cx, cy + 22), fill=(170, 220, 255, 210), width=3)
+    elif kind == "star":
+        pts = []
+        for i in range(10):
+            r = 13 if i % 2 == 0 else 6
+            a = -1.57 + i * 3.14159 / 5
+            pts.append((cx + int(r * math.cos(a)), cy + int(r * math.sin(a))))
+        draw.polygon(pts, fill=(180, 220, 255, 230))
+    elif kind == "heart":
+        draw.ellipse((cx - 13, cy - 10, cx - 1, cy + 2), fill=(110, 195, 255, 230))
+        draw.ellipse((cx + 1, cy - 10, cx + 13, cy + 2), fill=(110, 195, 255, 230))
+        draw.polygon([(cx - 14, cy - 2), (cx + 14, cy - 2), (cx, cy + 16)], fill=(110, 195, 255, 230))
+    elif kind == "achievement":
+        draw.polygon([(cx, cy - 16), (cx - 15, cy - 4), (cx - 9, cy + 15), (cx + 9, cy + 15), (cx + 15, cy - 4)], fill=(110, 165, 255, 210))
+        draw.ellipse((cx - 7, cy - 7, cx + 7, cy + 7), fill=(255, 210, 90, 235))
+    elif kind == "pair":
+        draw.ellipse((cx - 13, cy - 11, cx - 2, cy), fill=(255, 85, 120, 220))
+        draw.ellipse((cx + 2, cy - 11, cx + 13, cy), fill=(255, 85, 120, 220))
+        draw.polygon([(cx - 14, cy - 2), (cx + 14, cy - 2), (cx, cy + 16)], fill=(255, 85, 120, 220))
+        draw.ellipse((cx + 9, cy - 18, cx + 18, cy - 9), fill=(255, 175, 195, 220))
+    elif kind == "clan":
+        draw.polygon([(cx, cy - 17), (cx - 15, cy - 7), (cx - 10, cy + 14), (cx + 10, cy + 14), (cx + 15, cy - 7)], fill=(185, 135, 255, 210))
+        draw.ellipse((cx - 6, cy - 5, cx + 6, cy + 7), fill=(120, 255, 160, 170))
+    else:
+        draw.ellipse((cx - 12, cy - 12, cx + 12, cy + 12), fill=(180, 220, 255, 190))
+
+
+def draw_profile_art(image: Image.Image, draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], theme: str, colors: list[str]) -> None:
+    """Красивая мини-иллюстрация справа вместо технического символа."""
+    x1, y1, x2, y2 = box
+    w, h = x2 - x1, y2 - y1
+    art = Image.new("RGBA", (w, h), (0, 0, 0, 0))
+    ad = ImageDraw.Draw(art)
+    c1 = parse_hex_color(colors[0] if colors else "#111827")
+    c2 = parse_hex_color(colors[-1] if colors else "#7aa2ff")
+    # gradient
+    for yy in range(h):
+        ratio = yy / max(h - 1, 1)
+        col = tuple(int(c1[i] * (1 - ratio) + c2[i] * ratio) for i in range(3))
+        ad.line((0, yy, w, yy), fill=(*col, 190))
+    rng = random.Random(str(theme) + str(colors))
+    # stars/particles
+    for _ in range(45):
+        px, py = rng.randint(5, w - 5), rng.randint(5, h - 5)
+        r = rng.choice([1, 1, 2])
+        ad.ellipse((px - r, py - r, px + r, py + r), fill=(255, 255, 255, rng.randint(45, 130)))
+    theme = str(theme).lower()
+    if any(k in theme for k in ["forest", "mountain", "nature"]):
+        # moon + mountains + trees
+        ad.ellipse((w - 85, 24, w - 35, 74), fill=(240, 250, 255, 150))
+        for base, alpha in [(0.67, 170), (0.78, 150), (0.9, 130)]:
+            pts = [(0, h)]
+            for i in range(0, w + 60, 60):
+                pts.append((i, int(h * base + rng.randint(-25, 25))))
+            pts.append((w, h))
+            ad.polygon(pts, fill=(18, 70, 55, alpha))
+    elif any(k in theme for k in ["sakura", "anime"]):
+        ad.ellipse((w - 88, 18, w - 28, 78), fill=(255, 235, 245, 150))
+        ad.line((58, 30, 28, h - 15), fill=(95, 45, 65, 230), width=9)
+        for off in range(0, 70, 18):
+            ad.line((58, 75 + off, 150 + off, 45 + off), fill=(110, 55, 80, 210), width=5)
+        for _ in range(90):
+            px, py = rng.randint(0, w), rng.randint(0, h)
+            ad.ellipse((px, py, px + 6, py + 3), fill=(255, 180, 215, rng.randint(80, 170)))
+    elif any(k in theme for k in ["ocean", "water"]):
+        ad.ellipse((w - 96, 18, w - 26, 88), fill=(230, 255, 255, 95))
+        for wave in range(6):
+            yy = int(h * 0.54 + wave * 24)
+            pts = [(0, h)]
+            for xx in range(0, w + 20, 20):
+                pts.append((xx, yy + int(math.sin(xx / 42 + wave) * 8)))
+            pts.append((w, h))
+            ad.polygon(pts, fill=(40, 130 + wave * 12, 190 + wave * 8, 80))
+    elif any(k in theme for k in ["fox", "wolf", "panda", "animal"]):
+        # stylized animal silhouette
+        ad.ellipse((w // 2 - 55, h // 2 - 38, w // 2 + 55, h // 2 + 58), fill=(20, 24, 34, 180))
+        ad.polygon([(w//2-48,h//2-25),(w//2-25,h//2-75),(w//2-5,h//2-28)], fill=(20,24,34,185))
+        ad.polygon([(w//2+48,h//2-25),(w//2+25,h//2-75),(w//2+5,h//2-28)], fill=(20,24,34,185))
+        ad.ellipse((w//2-26,h//2-3,w//2-16,h//2+7), fill=(210,230,255,170))
+        ad.ellipse((w//2+16,h//2-3,w//2+26,h//2+7), fill=(210,230,255,170))
+        ad.polygon([(w//2-7,h//2+18),(w//2+7,h//2+18),(w//2,h//2+28)], fill=(255,190,170,160))
+    else:
+        # peach/neon orb illustration
+        cx, cy = w // 2, h // 2
+        accent = c2
+        for r, a in [(95, 18), (72, 25), (52, 32)]:
+            ad.ellipse((cx-r, cy-r, cx+r, cy+r), fill=(*accent, a))
+        ad.ellipse((cx - 50, cy - 48, cx + 42, cy + 52), fill=(255, 155, 185, 50), outline=(255, 210, 225, 140), width=3)
+        ad.line((cx + 14, cy - 52, cx + 48, cy - 82), fill=(130, 255, 180, 130), width=5)
+        ad.ellipse((cx + 38, cy - 88, cx + 78, cy - 58), fill=(100, 240, 165, 105))
+    # glass vignette, rounded mask
+    art.alpha_composite(Image.new("RGBA", (w, h), (0, 0, 0, 45)))
+    mask = Image.new("L", (w, h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, w, h), radius=24, fill=255)
+    image.paste(art, (x1, y1), mask)
+    draw.rounded_rectangle(box, radius=24, outline=(255, 255, 255, 25), width=1)
+
+
+def draw_achievement_symbol(image: Image.Image, draw: ImageDraw.ImageDraw, xy: tuple[int, int], done: bool = False) -> None:
+    x, y = xy
+    color = (255, 215, 90, 230) if done else (120, 170, 255, 210)
+    draw.polygon([(x + 24, y), (x + 4, y + 15), (x + 11, y + 41), (x + 37, y + 41), (x + 44, y + 15)], fill=color)
+    draw.ellipse((x + 15, y + 12, x + 33, y + 30), fill=(255, 255, 255, 95))
 # ------------------------- DATABASE -------------------------
 class Database:
     def __init__(self, path: str):
@@ -1280,7 +1427,7 @@ def load_font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont | ImageFo
 
 
 async def create_profile_card(member: discord.Member) -> io.BytesIO:
-    """Главный экран профиля в стиле компактной dashboard-карточки."""
+    """Главный экран профиля в стиле компактной dashboard-карточки, без ломаных emoji."""
     row = bot.db.get_user(member.guild.id, member.id)
     backgrounds = bot.config.get("profile_backgrounds", {})
     background_key = row.get("background", "default")
@@ -1292,12 +1439,9 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     image = draw_theme_background((width, height), theme, colors)
     draw = ImageDraw.Draw(image)
 
-    # Dark glass overlay like the reference.
-    image.alpha_composite(Image.new("RGBA", (width, height), (0, 0, 0, 88)))
+    image.alpha_composite(Image.new("RGBA", (width, height), (0, 0, 0, 92)))
     draw = ImageDraw.Draw(image)
 
-    # Fonts.
-    title_font = load_font(36, True)
     name_font = load_font(28, True)
     medium_bold = load_font(22, True)
     text_font = load_font(20)
@@ -1310,14 +1454,13 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     def pill(box: tuple[int, int, int, int], alpha: int = 42) -> None:
         draw.rounded_rectangle(box, radius=(box[3] - box[1]) // 2, fill=(255, 255, 255, alpha), outline=(255, 255, 255, 18), width=1)
 
-    # Outer card and panels.
     glass_rect((18, 18, width - 18, height - 18), radius=34, alpha=28, outline=34)
     glass_rect((50, 56, 300, height - 62), radius=28, alpha=34, outline=24)
     glass_rect((320, 56, 808, 356), radius=24, alpha=32, outline=20)
     glass_rect((824, 56, width - 50, 356), radius=24, alpha=32, outline=20)
     glass_rect((824, 382, width - 50, 520), radius=24, alpha=24, outline=18)
 
-    # Avatar + mini profile left.
+    # Avatar
     avatar_bytes = await member.display_avatar.replace(size=256, static_format="png").read()
     avatar = Image.open(io.BytesIO(avatar_bytes)).convert("RGBA").resize((152, 152))
     mask = Image.new("L", (152, 152), 0)
@@ -1329,7 +1472,6 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     name_w, _ = rich_text_size(draw, display_name, name_font)
     draw_rich_text(image, draw, (175 - name_w // 2, 252), display_name, name_font, fill=(255, 255, 255, 245))
 
-    # Core stats.
     level = int(row["level"])
     xp = int(row["xp"])
     balance = int(row["balance"])
@@ -1342,85 +1484,73 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     progress = 0 if next_level_xp == current_level_xp else (xp - current_level_xp) / (next_level_xp - current_level_xp)
     progress = max(0, min(1, progress))
 
-    # Achievements count.
     try:
         achieved_count = sum(1 for ach in calculate_achievements(member) if ach.get("completed"))
     except Exception:
         achieved_count = len(bot.db.get_purchases(member.guild.id, member.id, "background"))
 
-    # Left economy chips.
-    coin_text = f"{balance:,}".replace(",", " ")
-    ach_text = f"{achieved_count} шт."
-    left_chips = [
-        ("🧷", coin_text),
-        ("🏅", ach_text),
-    ]
+    # Left economy chips: currency icon is configurable in config.json -> currency.symbol
     chip_y = 318
-    for icon, value in left_chips:
-        pill((78, chip_y, 270, chip_y + 50), alpha=42)
-        draw_rich_text(image, draw, (98, chip_y + 13), icon, text_font, fill=(210, 228, 255, 235))
-        val_w, _ = rich_text_size(draw, value, medium_bold)
-        draw_rich_text(image, draw, (248 - val_w, chip_y + 12), value, medium_bold, fill=(255, 255, 255, 245))
-        chip_y += 62
+    pill((78, chip_y, 270, chip_y + 50), alpha=42)
+    draw_currency_icon(image, draw, (112, chip_y + 25), radius=17)
+    coin_text = f"{balance:,}".replace(",", " ")
+    val_w, _ = rich_text_size(draw, coin_text, medium_bold)
+    draw_rich_text(image, draw, (248 - val_w, chip_y + 12), coin_text, medium_bold, fill=(255, 255, 255, 245))
 
-    # Small left meta.
+    chip_y += 62
+    pill((78, chip_y, 270, chip_y + 50), alpha=42)
+    draw_profile_icon(image, draw, "achievement", (96, chip_y + 10, 130, chip_y + 44))
+    ach_text = f"{achieved_count} шт."
+    val_w, _ = rich_text_size(draw, ach_text, medium_bold)
+    draw_rich_text(image, draw, (248 - val_w, chip_y + 12), ach_text, medium_bold, fill=(255, 255, 255, 245))
+
     joined = member.joined_at.strftime("%d.%m.%Y") if member.joined_at else "—"
     created = member.created_at.strftime("%d.%m.%Y") if member.created_at else "—"
-    meta_lines = [
-        ("LVL", str(level)),
-        ("TOP", f"#{rank or '-'}"),
-        ("ГС", format_duration_minutes(voice_minutes)),
-        ("Вход", joined),
-        ("Акк", created),
-    ]
+    meta_lines = [("LVL", str(level)), ("TOP", f"#{rank or '-'}"), ("ГС", format_duration_minutes(voice_minutes))]
     y = 450
-    for label, value in meta_lines[:3]:
+    for label, value in meta_lines:
         draw.text((82, y), label, font=tiny_font, fill=(210, 220, 255, 170))
         draw.text((162, y - 2), value, font=small_font, fill=(255, 255, 255, 220))
         y += 32
 
-    # Center title.
     pill((458, 82, 666, 124), alpha=34)
     title = "Статистика"
     tw, _ = _plain_text_size(draw, title, medium_bold)
     draw.text((562 - tw // 2, 92), title, font=medium_bold, fill=(255, 255, 255, 235))
 
-    # Status blocks like the reference.
-    current_voice = "Не в во.."
+    current_voice = "Не в войсе"
     if member.voice and member.voice.channel:
-        current_voice = truncate_text(member.voice.channel.name, 12)
+        current_voice = clean_display_value(member.voice.channel.name, 13)
 
     fav = bot.db.favorite_voice_channel(member.guild.id, member.id)
     if fav:
         fav_channel = member.guild.get_channel(int(fav["channel_id"]))
-        fav_name = truncate_text(fav_channel.name if fav_channel else "Комната", 12)
+        fav_name = clean_display_value(fav_channel.name if fav_channel else "Комната", 13)
     else:
-        fav_name = "♡ 0"
+        fav_name = "Нет"
 
     stat_cards = [
-        ("📍", "Находится в", current_voice),
-        ("🎙️", "Голосовой онлайн", format_duration_minutes(voice_minutes)),
-        ("⭐", "Топ по онлайну", f"{rank or '-'} место"),
-        ("💙", "Любимая комната", fav_name),
+        ("location", "Находится в", current_voice),
+        ("mic", "Голосовой онлайн", format_duration_minutes(voice_minutes)),
+        ("star", "Топ по онлайну", f"{rank or '-'} место"),
+        ("heart", "Любимая комната", fav_name),
     ]
     positions = [(348, 154), (570, 154), (348, 244), (570, 244)]
-    for (icon, label, value), (x, y) in zip(stat_cards, positions):
+    for (icon_kind, label, value), (x, y) in zip(stat_cards, positions):
         glass_rect((x, y, x + 205, y + 70), radius=18, alpha=30, outline=16)
-        # small icon bubble
         draw.rounded_rectangle((x + 12, y + 21, x + 42, y + 51), radius=11, fill=(120, 175, 220, 60))
-        draw_rich_text(image, draw, (x + 18, y + 27), icon, tiny_font, fill=(210, 232, 255, 235))
-        lw, _ = _plain_text_size(draw, label, tiny_font)
+        draw_profile_icon(image, draw, icon_kind, (x + 15, y + 24, x + 39, y + 48))
         draw.text((x + 54, y + 14), label, font=tiny_font, fill=(205, 214, 235, 155))
-        draw_rich_text(image, draw, (x + 54, y + 36), value, medium_bold, fill=(255, 255, 255, 238))
+        draw.text((x + 54, y + 36), truncate_text(value, 14), font=medium_bold, fill=(255, 255, 255, 238))
 
-    # Center bottom progress dots.
+    # Progress / level milestones
     level_dots_y = 322
     pill((380, level_dots_y, 752, level_dots_y + 42), alpha=32)
     for i in range(8):
         cx = 422 + i * 40
         color = (255, 218, 76, 210) if i == min(7, level // 15) else (255, 255, 255, 50)
         draw.ellipse((cx - 13, level_dots_y + 8, cx + 13, level_dots_y + 34), fill=color)
-    # Slim progress line under stats.
+
     bar_x, bar_y, bar_w, bar_h = 356, 390, 430, 18
     draw.text((356, 366), f"Прогресс: {xp:,}/{next_level_xp:,} XP".replace(",", " "), font=small_font, fill=(235, 240, 255, 200))
     draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=9, fill=(10, 12, 22, 170))
@@ -1430,25 +1560,10 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
         draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + bar_h), radius=9, fill=(*accent, 230))
     draw.text((bar_x + bar_w + 12, bar_y - 2), f"{int(progress * 100)}%", font=tiny_font, fill=(255, 255, 255, 200))
 
-    # Right emblem panel.
-    emblem_center = (957, 160)
-    accent = parse_hex_color(colors[-1] if colors else "#79A7FF", default=(121, 167, 255))
-    # A soft glowing peach/drop-like emblem.
-    for r, a in [(92, 20), (70, 28), (52, 36)]:
-        draw.ellipse((emblem_center[0] - r, emblem_center[1] - r, emblem_center[0] + r, emblem_center[1] + r), fill=(*accent, a))
-    draw.polygon(
-        [
-            (emblem_center[0], emblem_center[1] - 78),
-            (emblem_center[0] - 56, emblem_center[1] + 36),
-            (emblem_center[0], emblem_center[1] + 74),
-            (emblem_center[0] + 56, emblem_center[1] + 36),
-        ],
-        outline=(*accent, 230),
-        fill=(*accent, 28),
-    )
-    draw.line((emblem_center[0], emblem_center[1] - 56, emblem_center[0] - 26, emblem_center[1] + 32, emblem_center[0] + 28, emblem_center[1] + 32, emblem_center[0], emblem_center[1] - 56), fill=(205, 225, 255, 200), width=5)
+    # Right art panel: generated mini-art based on selected background/theme.
+    draw_profile_art(image, draw, (856, 84, 1038, 270), theme, colors)
 
-    # Relationship/clan blocks.
+    # Pair/clan blocks with vector icons.
     relations = bot.db.relationships_for_member(member.guild.id, member.id)
     pair_text = "Пары нет"
     pair_sub = "Пусто"
@@ -1460,19 +1575,15 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
             pair_sub = truncate_text(other.display_name if other else str(other_id), 15)
             break
 
-    right_rows = [
-        ("💞", pair_text, pair_sub),
-        ("🎭", "Клана нет", "Пусто"),
-    ]
+    right_rows = [("pair", pair_text, pair_sub), ("clan", "Клана нет", "Пусто")]
     ry = 395
-    for icon, main, sub in right_rows:
+    for icon_kind, main, sub in right_rows:
         draw.ellipse((850, ry + 10, 892, ry + 52), fill=(255, 255, 255, 34), outline=(255, 255, 255, 24), width=1)
-        draw_rich_text(image, draw, (860, ry + 20), icon, small_font, fill=(255, 255, 255, 210))
-        draw_rich_text(image, draw, (908, ry + 12), main, medium_bold, fill=(255, 255, 255, 240))
+        draw_profile_icon(image, draw, icon_kind, (858, ry + 18, 884, ry + 44))
+        draw.text((908, ry + 12), main, font=medium_bold, fill=(255, 255, 255, 240))
         draw.text((908, ry + 40), sub, font=tiny_font, fill=(210, 220, 235, 145))
         ry += 64
 
-    # Footer small technical info.
     draw.text((356, 548), f"Сообщения: {message_count:,}".replace(",", " "), font=tiny_font, fill=(220, 228, 255, 155))
     draw.text((530, 548), f"Варны: {warnings_count}", font=tiny_font, fill=(220, 228, 255, 155))
     draw.text((632, 548), f"Фон: {bg_data.get('name', background_key)}", font=tiny_font, fill=(220, 228, 255, 155))
@@ -1482,20 +1593,6 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     output.seek(0)
     return output
 
-
-
-def user_achievement_metrics(member: discord.Member) -> dict[str, int]:
-    row = bot.db.get_user(member.guild.id, member.id)
-    purchases = bot.db.get_purchases(member.guild.id, member.id, "background")
-    relations = bot.db.relationships_for_member(member.guild.id, member.id)
-    return {
-        "message_count": int(row.get("message_count", 0)),
-        "voice_minutes": int(row.get("voice_minutes", 0)),
-        "level": int(row.get("level", 0)),
-        "backgrounds": len(purchases),
-        "relationships": len(relations),
-        "case_opened": int(row.get("case_opened", 0)),
-    }
 
 
 def achievement_progress(member: discord.Member) -> list[dict[str, Any]]:
@@ -1529,7 +1626,7 @@ def create_achievement_screen(member: discord.Member, page: int = 0) -> io.Bytes
     small_font = load_font(18)
     tiny_font = load_font(15)
 
-    draw_text_with_shadow(draw, (42, 34), "🏆 Достижения Peach Lounge", title_font)
+    draw_text_with_shadow(draw, (42, 34), "Достижения Peach Lounge", title_font)
     metrics = achievement_progress(member)
     done_count = sum(1 for x in metrics if x["done"])
     draw.text((46, 82), f"{member.display_name} • выполнено {done_count}/{len(metrics)}", font=text_font, fill=(225, 232, 255, 220))
@@ -1542,7 +1639,7 @@ def create_achievement_screen(member: discord.Member, page: int = 0) -> io.Bytes
     y = 128
     for item in items:
         draw_glass(draw, (40, y, width - 40, y + 100), radius=22, fill=(255, 255, 255, 24))
-        draw_rich_text(image, draw, (68, y + 20), item["emoji"], title_font, fill=(255, 255, 255, 255))
+        draw_achievement_symbol(image, draw, (66, y + 20), done=bool(item["done"]))
         draw.text((124, y + 18), item["title"], font=text_font, fill=(255, 255, 255, 242))
         draw.text((124, y + 48), item["desc"], font=small_font, fill=(210, 220, 255, 205))
         progress_text = "Макс. уровень" if item["done"] else f"{item['value']}/{item['target']}"

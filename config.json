@@ -497,5 +497,9 @@
       "color": "#FFC2D1",
       "footer": "Приятного вайба в Peach Lounge"
     }
+  },
+  "currency": {
+    "symbol": "🍑",
+    "name": "персики"
   }
 }
