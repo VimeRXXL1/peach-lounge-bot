@@ -1507,7 +1507,7 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     progress = max(0, min(1, progress))
 
     try:
-        achieved_count = sum(1 for ach in calculate_achievements(member) if ach.get("completed"))
+        achieved_count = sum(1 for ach in calculate_achievements(member) if ach.get("done") or ach.get("completed"))
     except Exception:
         achieved_count = len(bot.db.get_purchases(member.guild.id, member.id, "background"))
 
@@ -1741,10 +1741,49 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
         draw.text((908, ry + 40), sub, font=tiny_font, fill=(210, 220, 235, 145))
         ry += 64
 
+    # Completed achievement emojis strip.
+    completed_achievements = [ach for ach in calculate_achievements(member) if ach.get("done") or ach.get("completed")]
+    ach_strip_y = 476
+    ach_box = (356, ach_strip_y, 786, ach_strip_y + 38)
+    pill(ach_box, alpha=26)
+
+    draw.text((ach_box[0] + 14, ach_strip_y + 12), "Ачивки", font=tiny_font, fill=(210, 220, 245, 150))
+    ach_x = ach_box[0] + 80
+    max_ach_x = ach_box[2] - 12
+    shown_achievements = completed_achievements[:7]
+
+    if not shown_achievements:
+        draw.text((ach_x, ach_strip_y + 12), "пока нет", font=tiny_font, fill=(220, 228, 255, 125))
+    else:
+        for ach in shown_achievements:
+            if ach_x + 28 > max_ach_x:
+                break
+            draw.rounded_rectangle(
+                (ach_x, ach_strip_y + 6, ach_x + 28, ach_strip_y + 34),
+                radius=14,
+                fill=(255, 255, 255, 24),
+                outline=(255, 255, 255, 42),
+                width=1,
+            )
+            draw_centered_emoji((ach_x + 4, ach_strip_y + 4, ach_x + 24, ach_strip_y + 32), str(ach.get("emoji", "🏅")), size=18)
+            ach_x += 32
+
+        hidden_achievements = max(0, len(completed_achievements) - len(shown_achievements))
+        if hidden_achievements > 0 and ach_x + 34 <= max_ach_x:
+            draw.rounded_rectangle(
+                (ach_x, ach_strip_y + 6, ach_x + 34, ach_strip_y + 34),
+                radius=14,
+                fill=(255, 255, 255, 20),
+                outline=(255, 255, 255, 36),
+                width=1,
+            )
+            more_text = f"+{hidden_achievements}"
+            draw.text((ach_x + 8, ach_strip_y + 11), more_text, font=tiny_font, fill=(255, 255, 255, 190))
+
     # Bottom info cards: cleaner than one small gray footer line.
     bottom_cards = [
         ("💬", "Сообщения", f"{message_count:,}".replace(",", " ")),
-        ("⚠️", "Варны", str(warnings_count)),
+        ("❗", "Варны", str(warnings_count)),
         ("🎨", "Фон", str(bg_data.get("name", background_key))),
     ]
     bx = 350
@@ -3033,17 +3072,17 @@ THEME_ART_MAP = {
 }
 
 ACHIEVEMENT_DEFS = [
-    {"id": "msg_50", "title": "Первые слова", "desc": "Напиши 50 сообщений на сервере.", "metric": "messages", "target": 50, "icon": "messages"},
-    {"id": "msg_250", "title": "Общительный персик", "desc": "Напиши 250 сообщений.", "metric": "messages", "target": 250, "icon": "messages"},
-    {"id": "voice_60", "title": "Голос есть", "desc": "Проведи 1 час в голосовых каналах.", "metric": "voice", "target": 60, "icon": "voice"},
-    {"id": "voice_600", "title": "Ночной житель", "desc": "Проведи 10 часов в голосовых.", "metric": "voice", "target": 600, "icon": "voice"},
-    {"id": "level_5", "title": "Peach Rising", "desc": "Достигни 5 уровня профиля.", "metric": "level", "target": 5, "icon": "level"},
-    {"id": "background_1", "title": "Своя атмосфера", "desc": "Купи первый фон профиля.", "metric": "backgrounds", "target": 1, "icon": "backgrounds"},
-    {"id": "background_4", "title": "Коллекционер", "desc": "Собери 4 фона профиля.", "metric": "backgrounds", "target": 4, "icon": "backgrounds"},
-    {"id": "relation_1", "title": "Не один", "desc": "Получи первую связь / пару на сервере.", "metric": "relations", "target": 1, "icon": "relations"},
-    {"id": "case_5", "title": "Любитель кейсов", "desc": "Открой 5 кейсов.", "metric": "cases", "target": 5, "icon": "cases"},
-    {"id": "daily_7", "title": "Верность серверу", "desc": "Забери daily 7 раз.", "metric": "daily", "target": 7, "icon": "daily"},
-    {"id": "balance_1000", "title": "На стиле", "desc": "Накопи 1000 валюты сервера.", "metric": "balance", "target": 1000, "icon": "balance"},
+    {"id": "msg_50", "emoji": "💬", "title": "Первые слова", "desc": "Напиши 50 сообщений на сервере.", "metric": "messages", "target": 50, "icon": "messages"},
+    {"id": "msg_250", "emoji": "🗣️", "title": "Общительный персик", "desc": "Напиши 250 сообщений.", "metric": "messages", "target": 250, "icon": "messages"},
+    {"id": "voice_60", "emoji": "🎙️", "title": "Голос есть", "desc": "Проведи 1 час в голосовых каналах.", "metric": "voice", "target": 60, "icon": "voice"},
+    {"id": "voice_600", "emoji": "🌙", "title": "Ночной житель", "desc": "Проведи 10 часов в голосовых.", "metric": "voice", "target": 600, "icon": "voice"},
+    {"id": "level_5", "emoji": "⭐", "title": "Peach Rising", "desc": "Достигни 5 уровня профиля.", "metric": "level", "target": 5, "icon": "level"},
+    {"id": "background_1", "emoji": "🎨", "title": "Своя атмосфера", "desc": "Купи первый фон профиля.", "metric": "backgrounds", "target": 1, "icon": "backgrounds"},
+    {"id": "background_4", "emoji": "🖼️", "title": "Коллекционер", "desc": "Собери 4 фона профиля.", "metric": "backgrounds", "target": 4, "icon": "backgrounds"},
+    {"id": "relation_1", "emoji": "💕", "title": "Не один", "desc": "Получи первую связь / пару на сервере.", "metric": "relations", "target": 1, "icon": "relations"},
+    {"id": "case_5", "emoji": "🎁", "title": "Любитель кейсов", "desc": "Открой 5 кейсов.", "metric": "cases", "target": 5, "icon": "cases"},
+    {"id": "daily_7", "emoji": "☀️", "title": "Верность серверу", "desc": "Забери daily 7 раз.", "metric": "daily", "target": 7, "icon": "daily"},
+    {"id": "balance_1000", "emoji": "🍑", "title": "На стиле", "desc": "Накопи 1000 валюты сервера.", "metric": "balance", "target": 1000, "icon": "balance"},
 ]
 
 
@@ -3185,7 +3224,7 @@ def create_achievement_screen(member: discord.Member, page: int = 0) -> io.Bytes
         draw.rounded_rectangle((58, y + 16, 110, y + 68), radius=18, fill=(255, 255, 255, 18), outline=(255, 255, 255, 30), width=1)
         draw_achievement_symbol(image, draw, (61, y + 19), done=bool(item["done"]), icon_kind=str(item.get("icon", "achievement")))
         # text
-        draw.text((134, y + 16), item["title"], font=text_font, fill=(255, 255, 255, 242))
+        draw_rich_text(image, draw, (134, y + 16), f"{item.get('emoji', '🏅')} {item['title']}", text_font, fill=(255, 255, 255, 242))
         draw.text((134, y + 46), item["desc"], font=small_font, fill=(210, 220, 255, 205))
         progress_text = "Получено" if item["done"] else f"{item['value']}/{item['target']}"
         draw.text((width - 220, y + 20), progress_text, font=small_font, fill=(255, 255, 255, 235))
