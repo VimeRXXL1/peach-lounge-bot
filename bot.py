@@ -1582,7 +1582,7 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     ]
     visible_roles = sorted(visible_roles, key=lambda r: r.position, reverse=True)
 
-    def clean_role_value(value: str, max_chars: int = 18) -> str:
+    def clean_role_value(value: str, max_chars: int = 24) -> str:
         # Убираем только декоративные разделители, но оставляем emoji ролей.
         value = str(value)
         for char in DECORATION_CHARS:
@@ -1590,9 +1590,22 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
         value = " ".join(value.split()).strip()
         return truncate_text(value or "Роль", max_chars)
 
+    def fit_role_text(value: str, max_width: int) -> str:
+        # Режем строку именно по пикселям, чтобы текст не вылезал из плашки.
+        value = str(value)
+        if rich_text_size(draw, value, role_font)[0] <= max_width:
+            return value
+        ellipsis = "…"
+        clean = value
+        while clean and rich_text_size(draw, clean + ellipsis, role_font)[0] > max_width:
+            clean = clean[:-1]
+        return (clean + ellipsis) if clean else ellipsis
+
     role_x = roles_box[0] + 10
     max_role_x = roles_box[2] - 10
     role_font = tiny_font
+    chip_gap = 8
+    max_chips = 3
 
     if not visible_roles:
         empty_text = "Ролей пока нет"
@@ -1606,49 +1619,78 @@ async def create_profile_card(member: discord.Member) -> io.BytesIO:
     else:
         shown_count = 0
         hidden_count = 0
+
         for role in visible_roles:
-            role_text = clean_role_value(role.name, 20)
-            tw, _ = rich_text_size(draw, role_text, role_font)
-            chip_w = min(max(70, tw + 22), 150)
+            remaining_roles = len(visible_roles) - shown_count - 1
+            reserve_more = 50 if remaining_roles > 0 and shown_count >= 1 else 0
+            available_w = max_role_x - role_x - reserve_more
+
+            if available_w < 58:
+                hidden_count += 1
+                continue
+
+            role_text = clean_role_value(role.name, 24)
+            text_max_w = max(24, min(available_w - 22, 128))
+            fitted_text = fit_role_text(role_text, text_max_w)
+            tw, _ = rich_text_size(draw, fitted_text, role_font)
+            chip_w = min(max(58, tw + 22), available_w)
 
             if role_x + chip_w > max_role_x:
                 hidden_count += 1
                 continue
 
             role_color = role.color.to_rgb() if role.color.value else (255, 170, 200)
+            chip_box = (role_x, roles_y + 7, role_x + chip_w, roles_y + 35)
+
             draw.rounded_rectangle(
-                (role_x, roles_y + 7, role_x + chip_w, roles_y + 35),
+                chip_box,
                 radius=14,
                 fill=(*role_color, 86),
                 outline=(*role_color, 145),
                 width=1,
             )
+
+            # Маска-клип: даже если шрифт/emoji даст странную ширину, текст физически не выйдет за плашку.
+            chip_layer = Image.new("RGBA", image.size, (0, 0, 0, 0))
+            chip_draw = ImageDraw.Draw(chip_layer)
             draw_rich_text(
-                image,
-                draw,
+                chip_layer,
+                chip_draw,
                 (role_x + 10, roles_y + 12),
-                truncate_text(role_text, 16),
+                fitted_text,
                 role_font,
                 fill=(255, 255, 255, 230),
             )
+            clip_mask = Image.new("L", image.size, 0)
+            mask_draw = ImageDraw.Draw(clip_mask)
+            mask_draw.rounded_rectangle(
+                (role_x + 6, roles_y + 7, role_x + chip_w - 6, roles_y + 35),
+                radius=12,
+                fill=255,
+            )
+            clipped = Image.new("RGBA", image.size, (0, 0, 0, 0))
+            clipped.alpha_composite(chip_layer)
+            clipped.putalpha(Image.composite(clipped.getchannel("A"), Image.new("L", image.size, 0), clip_mask))
+            image.alpha_composite(clipped)
 
-            role_x += chip_w + 8
+            role_x += chip_w + chip_gap
             shown_count += 1
 
-            if shown_count >= 3:
+            if shown_count >= max_chips:
                 hidden_count += max(0, len(visible_roles) - shown_count)
                 break
 
-        if hidden_count > 0 and role_x + 46 <= max_role_x:
+        if hidden_count > 0 and role_x + 44 <= max_role_x:
             more_text = f"+{hidden_count}"
+            more_w = 42
             draw.rounded_rectangle(
-                (role_x, roles_y + 7, role_x + 42, roles_y + 35),
+                (role_x, roles_y + 7, role_x + more_w, roles_y + 35),
                 radius=14,
                 fill=(255, 255, 255, 32),
                 outline=(255, 255, 255, 55),
                 width=1,
             )
-            draw.text((role_x + 11, roles_y + 12), more_text, font=role_font, fill=(255, 255, 255, 210))
+            draw.text((role_x + 10, roles_y + 12), more_text, font=role_font, fill=(255, 255, 255, 210))
 
     # Right art panel: generated mini-art based on selected background/theme.
     draw_profile_art(image, draw, (856, 84, 1038, 270), theme, colors)
