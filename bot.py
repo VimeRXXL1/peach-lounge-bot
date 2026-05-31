@@ -1671,13 +1671,13 @@ def create_economy_screen(member: discord.Member, page: int = 0) -> io.BytesIO:
     transactions = bot.db.get_transactions(member.guild.id, member.id, 80)
 
     draw_text_with_shadow(draw, (42, 34), "📉 Анализ поступлений и расходов", title_font)
-    draw.text((46, 78), f"{member.display_name} • баланс {int(row.get('balance', 0)):,} 🪙".replace(",", " "), font=text_font, fill=(225, 232, 255, 220))
+    draw.text((46, 78), f"{member.display_name} • баланс {int(row.get('balance', 0)):,} {get_currency_symbol()}".replace(',', ' '), font=text_font, fill=(225, 232, 255, 220))
 
     draw_glass(draw, (42, 118, 355, 300), radius=24)
     draw.text((70, 148), "За всё время", font=small_font, fill=(210, 220, 255, 200))
-    draw.text((70, 178), f"Получено: {summary['total_income']:,} 🪙".replace(",", " "), font=text_font, fill=(255, 255, 255, 235))
-    draw.text((70, 214), f"Потрачено: {summary['total_expense']:,} 🪙".replace(",", " "), font=text_font, fill=(255, 255, 255, 235))
-    draw.text((70, 250), f"Оборот: {summary['turnover']:,} 🪙".replace(",", " "), font=text_font, fill=(255, 255, 255, 235))
+    draw.text((70, 178), f"Получено: {summary['total_income']:,} {get_currency_symbol()}".replace(',', ' '), font=text_font, fill=(255, 255, 255, 235))
+    draw.text((70, 214), f"Потрачено: {summary['total_expense']:,} {get_currency_symbol()}".replace(',', ' '), font=text_font, fill=(255, 255, 255, 235))
+    draw.text((70, 250), f"Оборот: {summary['turnover']:,} {get_currency_symbol()}".replace(',', ' '), font=text_font, fill=(255, 255, 255, 235))
 
     draw_glass(draw, (380, 118, width - 42, 300), radius=24)
     draw.text((410, 146), "Категории", font=text_font, fill=(255, 255, 255, 235))
@@ -1707,7 +1707,7 @@ def create_economy_screen(member: discord.Member, page: int = 0) -> io.BytesIO:
         draw.text((74, y), created, font=small_font, fill=(180, 190, 215, 200))
         draw.text((190, y), str(tx["category"]), font=small_font, fill=(220, 230, 255, 210))
         draw.text((360, y), truncate_text(str(tx["reason"]), 55), font=small_font, fill=(235, 240, 255, 220))
-        draw.text((1000, y), f"{sign}{amount:,} 🪙".replace(",", " "), font=small_font, fill=(255, 255, 255, 235))
+        draw.text((1000, y), f"{sign}{amount:,} {get_currency_symbol()}".replace(',', ' '), font=small_font, fill=(255, 255, 255, 235))
         y += 32
     if not transactions:
         draw.text((74, 410), "Пока нет транзакций. Новые начисления и покупки появятся тут.", font=small_font, fill=(235, 240, 255, 220))
@@ -1740,7 +1740,7 @@ def create_shop_screen(member: discord.Member, page: int = 0) -> io.BytesIO:
     page = max(0, min(page, max_page))
 
     draw_text_with_shadow(draw, (42, 34), "🛒 Магазин фонов", title_font)
-    draw.text((930, 42), f"{int(row.get('balance', 0)):,} 🪙".replace(",", " "), font=text_font, fill=(255, 255, 255, 235))
+    draw.text((930, 42), f"{int(row.get('balance', 0)):,} {get_currency_symbol()}".replace(',', ' '), font=text_font, fill=(255, 255, 255, 235))
 
     cards = items[page * per_page : (page + 1) * per_page]
     positions = [(42, 112), (420, 112), (798, 112), (42, 338), (420, 338), (798, 338)]
@@ -1756,7 +1756,7 @@ def create_shop_screen(member: discord.Member, page: int = 0) -> io.BytesIO:
         draw.rounded_rectangle((x, y, x + 320, y + 160), radius=24, outline=(255, 255, 255, 35), width=1)
         draw.text((x + 20, y + 92), str(data.get("name", key))[:24], font=text_font, fill=(255, 255, 255, 240))
         price = int(data.get("price", 0))
-        status = "Куплено" if key in purchased else ("Бесплатно" if price <= 0 else f"{price:,} 🪙".replace(",", " "))
+        status = "Куплено" if key in purchased else ("Бесплатно" if price <= 0 else f"{price:,} {get_currency_symbol()}".replace(',', ' '))
         draw.text((x + 20, y + 124), status, font=small_font, fill=(230, 236, 255, 220))
         if row.get("background") == key:
             draw.rounded_rectangle((x + 205, y + 16, x + 300, y + 44), radius=14, fill=(90, 220, 150, 120))
@@ -1940,7 +1940,7 @@ class BackgroundSelect(discord.ui.Select):
         options = []
         for key, data in page_items:
             price = int(data.get("price", 0))
-            options.append(discord.SelectOption(label=str(data.get("name", key))[:100], value=key, description=("Бесплатно" if price <= 0 else f"Цена: {price} монет")[:100]))
+            options.append(discord.SelectOption(label=str(data.get("name", key))[:100], value=key, description=("Бесплатно" if price <= 0 else f"Цена: {price} {get_currency_symbol()}")[:100]))
         super().__init__(placeholder="Выберите понравившийся фон", min_values=1, max_values=1, options=options or [discord.SelectOption(label="Нет фонов", value="none")])
 
     async def callback(self, interaction: discord.Interaction) -> None:
@@ -2787,7 +2787,7 @@ async def leaderboard(interaction: discord.Interaction) -> None:
         member = interaction.guild.get_member(int(row["user_id"]))
         name = member.mention if member else f"ID {row['user_id']}"
         lines.append(
-            f"**{index}.** {name} — LVL **{row['level']}**, XP **{row['xp']}**, Баланс **{row['balance']} 🪙**, ГС **{format_duration_minutes(int(row.get('voice_minutes', 0)))}**"
+            f"**{index}.** {name} — LVL **{row['level']}**, XP **{row['xp']}**, Баланс **{row['balance']} {get_currency_symbol()}**, ГС **{format_duration_minutes(int(row.get('voice_minutes', 0)))}**"
         )
     embed = discord.Embed(title="🏆 Топ XP", description="\n".join(lines), color=discord.Color.green())
     await interaction.response.send_message(embed=embed)
@@ -2806,6 +2806,218 @@ async def on_app_command_error(interaction: discord.Interaction, error: app_comm
         await interaction.followup.send(message, ephemeral=True)
     else:
         await interaction.response.send_message(message, ephemeral=True)
+
+
+
+# ------------------------- PROFILE ASSET OVERRIDES V5.3 -------------------------
+ASSET_ROOT = Path(__file__).resolve().parent / "assets"
+PROFILE_ICON_FILES = {
+    "location": ASSET_ROOT / "profile_icons" / "location.png",
+    "mic": ASSET_ROOT / "profile_icons" / "mic.png",
+    "top": ASSET_ROOT / "profile_icons" / "top.png",
+    "heart": ASSET_ROOT / "profile_icons" / "room.png",
+    "room": ASSET_ROOT / "profile_icons" / "room.png",
+    "pair": ASSET_ROOT / "profile_icons" / "pair.png",
+    "clan": ASSET_ROOT / "profile_icons" / "clan.png",
+    "achievement": ASSET_ROOT / "profile_icons" / "achievement.png",
+    "currency": ASSET_ROOT / "profile_icons" / "currency.png",
+}
+ACH_ICON_FILES = {
+    "messages": ASSET_ROOT / "achievement_icons" / "messages.png",
+    "voice": ASSET_ROOT / "achievement_icons" / "voice.png",
+    "level": ASSET_ROOT / "achievement_icons" / "level.png",
+    "backgrounds": ASSET_ROOT / "achievement_icons" / "backgrounds.png",
+    "relations": ASSET_ROOT / "achievement_icons" / "relations.png",
+    "cases": ASSET_ROOT / "achievement_icons" / "cases.png",
+    "daily": ASSET_ROOT / "achievement_icons" / "daily.png",
+    "balance": ASSET_ROOT / "achievement_icons" / "balance.png",
+    "achievement": ASSET_ROOT / "achievement_icons" / "achievement.png",
+}
+THEME_ART_MAP = {
+    "default": ["peach_1.png", "peach_2.png"],
+    "sunset": ["peach_1.png", "peach_2.png"],
+    "aurora": ["peach_2.png", "city_2.png"],
+    "anime_city": ["city_1.png", "city_2.png"],
+    "night": ["city_1.png", "city_2.png"],
+    "sakura": ["sakura_1.png", "sakura_2.png"],
+    "ocean": ["ocean_1.png", "ocean_2.png"],
+    "forest": ["mountain_1.png", "mountain_2.png"],
+    "mountain": ["mountain_1.png", "mountain_2.png"],
+    "panda": ["panda_1.png"],
+    "fox": ["fox_1.png"],
+    "wolf": ["wolf_1.png"],
+}
+
+ACHIEVEMENT_DEFS = [
+    {"id": "msg_50", "title": "Первые слова", "desc": "Напиши 50 сообщений на сервере.", "metric": "messages", "target": 50, "icon": "messages"},
+    {"id": "msg_250", "title": "Общительный персик", "desc": "Напиши 250 сообщений.", "metric": "messages", "target": 250, "icon": "messages"},
+    {"id": "voice_60", "title": "Голос есть", "desc": "Проведи 1 час в голосовых каналах.", "metric": "voice", "target": 60, "icon": "voice"},
+    {"id": "voice_600", "title": "Ночной житель", "desc": "Проведи 10 часов в голосовых.", "metric": "voice", "target": 600, "icon": "voice"},
+    {"id": "level_5", "title": "Peach Rising", "desc": "Достигни 5 уровня профиля.", "metric": "level", "target": 5, "icon": "level"},
+    {"id": "background_1", "title": "Своя атмосфера", "desc": "Купи первый фон профиля.", "metric": "backgrounds", "target": 1, "icon": "backgrounds"},
+    {"id": "background_4", "title": "Коллекционер", "desc": "Собери 4 фона профиля.", "metric": "backgrounds", "target": 4, "icon": "backgrounds"},
+    {"id": "relation_1", "title": "Не один", "desc": "Получи первую связь / пару на сервере.", "metric": "relations", "target": 1, "icon": "relations"},
+    {"id": "case_5", "title": "Любитель кейсов", "desc": "Открой 5 кейсов.", "metric": "cases", "target": 5, "icon": "cases"},
+    {"id": "daily_7", "title": "Верность серверу", "desc": "Забери daily 7 раз.", "metric": "daily", "target": 7, "icon": "daily"},
+    {"id": "balance_1000", "title": "На стиле", "desc": "Накопи 1000 валюты сервера.", "metric": "balance", "target": 1000, "icon": "balance"},
+]
+
+
+def _load_asset(path: Path, size: Optional[tuple[int, int]] = None) -> Optional[Image.Image]:
+    try:
+        img = Image.open(path).convert("RGBA")
+        if size:
+            img = img.resize(size, Image.LANCZOS)
+        return img
+    except Exception:
+        return None
+
+
+def _paste_center(image: Image.Image, asset: Image.Image, box: tuple[int, int, int, int]) -> None:
+    x1, y1, x2, y2 = box
+    bw, bh = x2 - x1, y2 - y1
+    scale = min(bw / asset.width, bh / asset.height)
+    nw = max(1, int(asset.width * scale))
+    nh = max(1, int(asset.height * scale))
+    asset = asset.resize((nw, nh), Image.LANCZOS)
+    px = x1 + (bw - nw) // 2
+    py = y1 + (bh - nh) // 2
+    image.alpha_composite(asset, (px, py))
+
+
+def _simple_fallback_icon(draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], color=(180, 220, 255, 230)) -> None:
+    x1, y1, x2, y2 = box
+    draw.rounded_rectangle(box, radius=max(6, (x2 - x1) // 4), fill=(255, 255, 255, 18), outline=(255, 255, 255, 45), width=1)
+    draw.ellipse((x1 + 4, y1 + 4, x2 - 4, y2 - 4), outline=color, width=2)
+
+
+def draw_currency_icon(image: Image.Image, draw: ImageDraw.ImageDraw, center: tuple[int, int], radius: int = 18) -> None:
+    x, y = center
+    box = (x - radius - 3, y - radius - 3, x + radius + 3, y + radius + 3)
+    asset = _load_asset(PROFILE_ICON_FILES["currency"])
+    if asset is not None:
+        _paste_center(image, asset, box)
+    else:
+        _simple_fallback_icon(draw, box)
+
+
+def draw_profile_icon(image: Image.Image, draw: ImageDraw.ImageDraw, kind: str, box: tuple[int, int, int, int]) -> None:
+    asset = _load_asset(PROFILE_ICON_FILES.get(kind, PROFILE_ICON_FILES["achievement"]))
+    if asset is not None:
+        _paste_center(image, asset, box)
+    else:
+        _simple_fallback_icon(draw, box)
+
+
+def draw_achievement_symbol(image: Image.Image, draw: ImageDraw.ImageDraw, xy: tuple[int, int], done: bool = False, icon_kind: str = "achievement") -> None:
+    x, y = xy
+    box = (x, y, x + 46, y + 46)
+    asset = _load_asset(ACH_ICON_FILES.get(icon_kind, ACH_ICON_FILES["achievement"]))
+    if asset is not None:
+        # dim locked icons a bit
+        if not done:
+            dim = Image.new("RGBA", asset.size, (40, 55, 75, 90))
+            asset = asset.copy()
+            asset.alpha_composite(dim)
+        _paste_center(image, asset, box)
+    else:
+        _simple_fallback_icon(draw, box, color=(255, 215, 90, 220) if done else (120, 170, 255, 210))
+
+
+def draw_profile_art(image: Image.Image, draw: ImageDraw.ImageDraw, box: tuple[int, int, int, int], theme: str, colors: list[str]) -> None:
+    theme_key = str(theme or "default").lower()
+    art_files = THEME_ART_MAP.get(theme_key) or THEME_ART_MAP.get("default", [])
+    if not art_files:
+        return
+    chosen = random.choice(art_files)
+    asset = _load_asset(ASSET_ROOT / "profile_arts" / chosen)
+    x1, y1, x2, y2 = box
+    if asset is None:
+        draw.rounded_rectangle(box, radius=26, fill=(255, 255, 255, 12), outline=(255, 255, 255, 28), width=1)
+        return
+    target_w, target_h = x2 - x1, y2 - y1
+    asset = asset.resize((target_w, target_h), Image.LANCZOS)
+    # rounded mask to fit existing panel
+    mask = Image.new("L", (target_w, target_h), 0)
+    ImageDraw.Draw(mask).rounded_rectangle((0, 0, target_w, target_h), radius=26, fill=255)
+    image.paste(asset, (x1, y1), mask)
+    shadow = Image.new("RGBA", (target_w, target_h), (0, 0, 0, 35))
+    image.alpha_composite(shadow, (x1, y1))
+    draw.rounded_rectangle(box, radius=26, outline=(255, 255, 255, 32), width=1)
+
+
+def user_achievement_metrics(member: discord.Member) -> dict[str, int]:
+    row = bot.db.get_user(member.guild.id, member.id)
+    backgrounds_owned = len(bot.db.get_purchases(member.guild.id, member.id, "background"))
+    relations = bot.db.relationships_for_member(member.guild.id, member.id)
+    return {
+        "messages": int(row.get("message_count", 0)),
+        "voice": int(row.get("voice_minutes", 0)),
+        "level": int(row.get("level", 0)),
+        "backgrounds": int(backgrounds_owned),
+        "relations": int(len(relations)),
+        "cases": int(row.get("case_opened", 0)),
+        "daily": int(row.get("daily_count", 0)),
+        "balance": int(row.get("balance", 0)),
+    }
+
+
+def achievement_progress(member: discord.Member) -> list[dict[str, Any]]:
+    metrics = user_achievement_metrics(member)
+    result = []
+    for item in ACHIEVEMENT_DEFS:
+        value = int(metrics.get(item["metric"], 0))
+        target = int(item["target"])
+        result.append({**item, "value": value, "done": value >= target, "completed": value >= target, "percent": min(value / max(target, 1), 1.0)})
+    return result
+
+
+def calculate_achievements(member: discord.Member) -> list[dict[str, Any]]:
+    return achievement_progress(member)
+
+
+def create_achievement_screen(member: discord.Member, page: int = 0) -> io.BytesIO:
+    width, height = 1200, 720
+    image = make_ui_canvas(width, height, "night", ["#0f172a", "#1e293b"])
+    draw = ImageDraw.Draw(image)
+    title_font = load_font(36, True)
+    text_font = load_font(22)
+    small_font = load_font(18)
+
+    draw_text_with_shadow(draw, (42, 34), "Достижения Peach Lounge", title_font)
+    metrics = achievement_progress(member)
+    done_count = sum(1 for x in metrics if x["done"])
+    draw.text((46, 82), f"{member.display_name} • выполнено {done_count}/{len(metrics)}", font=text_font, fill=(225, 232, 255, 220))
+
+    per_page = 5
+    max_page = max(0, math.ceil(len(metrics) / per_page) - 1)
+    page = max(0, min(page, max_page))
+    items = metrics[page * per_page : (page + 1) * per_page]
+
+    y = 128
+    for item in items:
+        draw_glass(draw, (40, y, width - 40, y + 104), radius=22, fill=(255, 255, 255, 24))
+        # icon tile
+        draw.rounded_rectangle((58, y + 16, 110, y + 68), radius=18, fill=(255, 255, 255, 18), outline=(255, 255, 255, 30), width=1)
+        draw_achievement_symbol(image, draw, (61, y + 19), done=bool(item["done"]), icon_kind=str(item.get("icon", "achievement")))
+        # text
+        draw.text((134, y + 16), item["title"], font=text_font, fill=(255, 255, 255, 242))
+        draw.text((134, y + 46), item["desc"], font=small_font, fill=(210, 220, 255, 205))
+        progress_text = "Получено" if item["done"] else f"{item['value']}/{item['target']}"
+        draw.text((width - 220, y + 20), progress_text, font=small_font, fill=(255, 255, 255, 235))
+        bar_x, bar_y, bar_w, bar_h = 134, y + 78, width - 350, 12
+        draw.rounded_rectangle((bar_x, bar_y, bar_x + bar_w, bar_y + bar_h), radius=6, fill=(10, 12, 20, 175))
+        fill_w = int(bar_w * float(item["percent"]))
+        if fill_w:
+            fill_color = (255, 165, 120, 230) if item["done"] else (130, 170, 255, 230)
+            draw.rounded_rectangle((bar_x, bar_y, bar_x + fill_w, bar_y + bar_h), radius=6, fill=fill_color)
+        y += 112
+
+    draw.text((width // 2 - 80, height - 50), f"Страница {page + 1}/{max_page + 1}", font=small_font, fill=(230, 236, 255, 210))
+    out = io.BytesIO()
+    image.save(out, format="PNG")
+    out.seek(0)
+    return out
 
 
 def main() -> None:
