@@ -1101,6 +1101,7 @@ class ServerBot(commands.Bot):
             lambda: deque(maxlen=30)
         )
         self.voice_security_last_action: dict[tuple[int, int], float] = {}
+        self._guild_commands_synced = False
 
     async def setup_hook(self) -> None:
         self.add_view(RolePanelView(self))
@@ -1118,6 +1119,26 @@ class ServerBot(commands.Bot):
 
     async def on_ready(self) -> None:
         print(f"Бот запущен: {self.user} | Серверов: {len(self.guilds)}")
+
+        # Если guild_id_for_fast_sync не задан, setup_hook синхронизирует команды
+        # глобально. Discord может обновлять глобальные команды не сразу, поэтому
+        # после подключения дополнительно публикуем их в каждом текущем сервере.
+        if not self._guild_commands_synced:
+            for guild in self.guilds:
+                try:
+                    self.tree.copy_global_to(guild=discord.Object(id=guild.id))
+                    synced = await self.tree.sync(guild=discord.Object(id=guild.id))
+                    print(
+                        f"Slash-команды мгновенно синхронизированы для сервера "
+                        f"{guild.name} ({guild.id}): {len(synced)}."
+                    )
+                except Exception as exc:
+                    print(
+                        f"Не удалось синхронизировать slash-команды для "
+                        f"{guild.name} ({guild.id}): {exc!r}"
+                    )
+            self._guild_commands_synced = True
+
         await self.change_presence(activity=discord.Game(name="/profile | /leaderboard | /help_admin"))
 
     async def close(self) -> None:
