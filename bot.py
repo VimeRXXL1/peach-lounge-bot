@@ -10,6 +10,7 @@ import subprocess
 import time
 import urllib.request
 import urllib.error
+from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
@@ -21,7 +22,84 @@ from discord.ext import commands, tasks
 from dotenv import load_dotenv
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
 
+from security import ReputationVerdict, SecurityScanner
+
 CONFIG_PATH = Path("config.json")
+
+ANTISPAM_DEFAULTS: dict[str, Any] = {
+    "enabled": True,
+    "log_channel_id": 0,
+    "alert_role_id": 0,
+    "alert_role_ids": [],
+    "timeout_minutes": 60,
+    "delete_recent_messages": True,
+    "cleanup_window_seconds": 90,
+    "cleanup_message_limit": 25,
+    "action_cooldown_seconds": 20,
+    "max_messages": 6,
+    "message_window_seconds": 8,
+    "max_duplicate_messages": 3,
+    "duplicate_window_seconds": 35,
+    "max_mentions": 5,
+    "max_links_per_message": 4,
+    "max_same_link_messages": 3,
+    "link_repeat_window_seconds": 45,
+    "cross_channel_messages": 4,
+    "cross_channel_count": 3,
+    "cross_channel_window_seconds": 12,
+    "block_dangerous_attachments": False,
+    "suspicious_link_filter": False,
+    "link_reputation_enabled": True,
+    "alert_on_external_link": True,
+    "link_alert_cooldown_seconds": 60,
+    "auto_delete_malicious_links": True,
+    "max_reputation_urls_per_message": 5,
+    "virustotal_url_lookup": True,
+    "virustotal_malicious_threshold": 2,
+    "local_suspicious_score": 35,
+    "trusted_domains": [
+        "discord.com", "discord.gg", "discordapp.com", "discordapp.net", "discordcdn.com"
+    ],
+    "review_attachment_extensions": [
+        ".exe", ".scr", ".bat", ".cmd", ".com", ".pif", ".msi", ".ps1", ".vbs", ".lnk",
+        ".jar", ".apk", ".zip", ".rar", ".7z"
+    ],
+    "attachment_scan_max_mb": 20,
+    "auto_delete_malicious_attachments": True,
+    "voice_hop_protection": True,
+    "voice_hop_max_events": 6,
+    "voice_hop_window_seconds": 30,
+    "voice_hop_timeout_minutes": 10,
+    "disconnect_voice_spammer": True,
+    "dm_user": True,
+    "ignored_channel_ids": [],
+    "ignored_role_ids": [],
+    "ignored_user_ids": [],
+}
+
+DANGEROUS_ATTACHMENT_EXTENSIONS = {
+    ".exe", ".scr", ".bat", ".cmd", ".com", ".pif", ".msi", ".ps1", ".vbs", ".lnk"
+}
+
+SUSPICIOUS_LINK_PHRASES = (
+    "free nitro",
+    "discord nitro gift",
+    "nitro for free",
+    "steam gift",
+    "free steam",
+    "gift inventory",
+    "crypto giveaway",
+    "test my game",
+    "playtest my game",
+    "бесплатный нитро",
+    "нитро бесплатно",
+    "подарок стим",
+    "подарок steam",
+    "скачай мою игру",
+    "протестируй мою игру",
+)
+
+URL_RE = re.compile(r"(?i)\b(?:https?://|www\.)[^\s<>]+")
 
 
 # ------------------------- CONFIG -------------------------
@@ -1013,6 +1091,16 @@ class ServerBot(commands.Bot):
         super().__init__(command_prefix="!", intents=intents)
         self.db = Database(self.config.get("database_path", "data/bot.sqlite3"))
         self.voice_last_award: dict[tuple[int, int], float] = {}
+        self.antispam_history: dict[tuple[int, int], deque[dict[str, Any]]] = defaultdict(
+            lambda: deque(maxlen=60)
+        )
+        self.antispam_last_action: dict[tuple[int, int], float] = {}
+        self.security_scanner = SecurityScanner(self.antispam_settings)
+        self.security_alert_last: dict[tuple[int, int, str], float] = {}
+        self.voice_security_history: dict[tuple[int, int], deque[dict[str, Any]]] = defaultdict(
+            lambda: deque(maxlen=30)
+        )
+        self.voice_security_last_action: dict[tuple[int, int], float] = {}
 
     async def setup_hook(self) -> None:
         self.add_view(RolePanelView(self))
@@ -1032,6 +1120,10 @@ class ServerBot(commands.Bot):
         print(f"Бот запущен: {self.user} | Серверов: {len(self.guilds)}")
         await self.change_presence(activity=discord.Game(name="/profile | /leaderboard | /help_admin"))
 
+    async def close(self) -> None:
+        await self.security_scanner.close()
+        await super().close()
+
     def save_config(self) -> None:
         save_config(self.config)
 
@@ -1043,6 +1135,457 @@ class ServerBot(commands.Bot):
 
     def welcome_settings(self) -> dict[str, Any]:
         return self.config.setdefault("welcome", {})
+
+    def antispam_settings(self) -> dict[str, Any]:
+        settings = self.config.setdefault("antispam", {})
+        for key, value in ANTISPAM_DEFAULTS.items():
+            if key not in settings:
+                settings[key] = value.copy() if isinstance(value, list) else value
+        return settings
+
+    @staticmethod
+    def normalize_antispam_text(value: str) -> str:
+        value = value.lower().strip()
+        value = re.sub(r"\s+", " ", value)
+        return value[:1200]
+
+    @staticmethod
+    def extract_message_urls(value: str) -> tuple[str, ...]:
+        urls = []
+        for raw_url in URL_RE.findall(value or ""):
+            clean_url = raw_url.rstrip(".,!?;:)]}>'\"").lower()
+            urls.append(clean_url)
+        return tuple(urls)
+
+    def member_antispam_bypassed(
+        self,
+        member: discord.Member,
+        channel: Optional[discord.abc.GuildChannel] = None,
+    ) -> bool:
+        if member.bot:
+            return True
+        settings = self.antispam_settings()
+        if member.id in {int(x) for x in settings.get("ignored_user_ids", [])}:
+            return True
+        if channel is not None:
+            ignored_channels = {int(x) for x in settings.get("ignored_channel_ids", [])}
+            if channel.id in ignored_channels:
+                return True
+            category_id = getattr(channel, "category_id", None)
+            if category_id and category_id in ignored_channels:
+                return True
+        ignored_roles = {int(x) for x in settings.get("ignored_role_ids", [])}
+        if any(role.id in ignored_roles for role in member.roles):
+            return True
+        return False
+
+    def antispam_bypassed(self, message: discord.Message) -> bool:
+        if message.guild is None or not isinstance(message.author, discord.Member):
+            return True
+        channel = message.channel if isinstance(message.channel, discord.abc.GuildChannel) else None
+        return self.member_antispam_bypassed(message.author, channel)
+
+    def security_alert_roles(self, guild: discord.Guild) -> list[discord.Role]:
+        settings = self.antispam_settings()
+        role_ids = {int(x) for x in settings.get("alert_role_ids", []) if int(x) > 0}
+        legacy_id = int(settings.get("alert_role_id", 0) or 0)
+        if legacy_id:
+            role_ids.add(legacy_id)
+        roles = [guild.get_role(role_id) for role_id in role_ids]
+        return [role for role in roles if role is not None]
+
+    def security_log_channel(self, guild: discord.Guild) -> Optional[discord.abc.Messageable]:
+        channel_id = int(self.antispam_settings().get("log_channel_id", 0) or 0)
+        channel = guild.get_channel(channel_id) if channel_id else None
+        if channel is None or not isinstance(channel, discord.abc.Messageable):
+            channel = guild.system_channel
+        return channel if isinstance(channel, discord.abc.Messageable) else None
+
+    @staticmethod
+    def defang_security_item(value: str) -> str:
+        safe = str(value).replace("```", "`​``")
+        safe = re.sub(r"(?i)^https://", "hxxps://", safe)
+        safe = re.sub(r"(?i)^http://", "hxxp://", safe)
+        return safe.replace(".", "[.]")[:900]
+
+    async def send_security_review_alert(
+        self,
+        message: discord.Message,
+        title: str,
+        verdicts: list[ReputationVerdict],
+        action: str,
+        force_ping: bool = False,
+    ) -> None:
+        if message.guild is None or not verdicts:
+            return
+        settings = self.antispam_settings()
+        now = time.time()
+        cooldown = int(settings.get("link_alert_cooldown_seconds", 60))
+        filtered: list[ReputationVerdict] = []
+        for verdict in verdicts:
+            alert_key = verdict.domain or verdict.sha256 or verdict.item
+            key = (message.guild.id, message.author.id, alert_key)
+            if not force_ping and now - self.security_alert_last.get(key, 0.0) < cooldown:
+                continue
+            self.security_alert_last[key] = now
+            filtered.append(verdict)
+        if not filtered:
+            return
+
+        channel = self.security_log_channel(message.guild)
+        if channel is None:
+            return
+        highest = "clean"
+        if any(item.status == "malicious" for item in filtered):
+            highest = "malicious"
+        elif any(item.status == "suspicious" for item in filtered):
+            highest = "suspicious"
+        elif any(item.status == "unknown" for item in filtered):
+            highest = "unknown"
+        color = {
+            "malicious": discord.Color.red(),
+            "suspicious": discord.Color.orange(),
+            "unknown": discord.Color.yellow(),
+            "clean": discord.Color.green(),
+        }[highest]
+        channel_kind = (
+            "голосовой канал (текстовый чат)"
+            if isinstance(message.channel, discord.VoiceChannel)
+            else "текстовый канал"
+        )
+        embed = discord.Embed(
+            title=title,
+            description=(
+                f"**Пользователь:** {message.author.mention} (`{message.author.id}`)\n"
+                f"**Канал:** {message.channel.mention} — {channel_kind}\n"
+                f"**Действие бота:** {action}"
+            ),
+            color=color,
+            timestamp=discord.utils.utcnow(),
+        )
+        for index, verdict in enumerate(filtered[:5], start=1):
+            reasons = "; ".join(verdict.reasons[:4]) or "нет дополнительных данных"
+            providers = ", ".join(verdict.providers) if verdict.providers else "локальная проверка"
+            value = (
+                f"**Статус:** {verdict.status_label}\n"
+                f"**Объект:** `{self.defang_security_item(verdict.item)}`\n"
+                f"**Проверка:** {providers}\n"
+                f"**Причины:** {reasons[:650]}"
+            )
+            if verdict.sha256:
+                value += f"\n**SHA-256:** `{verdict.sha256}`"
+            embed.add_field(name=f"Проверка {index}", value=value[:1024], inline=False)
+        content = " ".join(role.mention for role in self.security_alert_roles(message.guild)) or None
+        try:
+            await channel.send(
+                content=content,
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    async def inspect_message_security(self, message: discord.Message, now: float) -> bool:
+        settings = self.antispam_settings()
+        if not bool(settings.get("link_reputation_enabled", True)):
+            return False
+
+        urls = self.extract_message_urls(message.content)
+        if urls:
+            verdicts = await self.security_scanner.scan_urls(urls)
+            malicious = [item for item in verdicts if item.is_malicious]
+            if malicious and bool(settings.get("auto_delete_malicious_links", True)):
+                details = "\n".join(
+                    f"{item.status_label}: {self.defang_security_item(item.item)} — {'; '.join(item.reasons[:3])}"
+                    for item in malicious
+                )
+                await self.handle_antispam(
+                    message,
+                    "репутационные сервисы подтвердили вредоносную ссылку",
+                    now,
+                    extra_details=details,
+                )
+                return True
+
+            should_alert = bool(settings.get("alert_on_external_link", True))
+            review = [
+                item
+                for item in verdicts
+                if item.status in {"suspicious", "unknown"}
+                or (should_alert and not self.security_scanner.trusted_domain(item.domain))
+            ]
+            if review:
+                await self.send_security_review_alert(
+                    message,
+                    "🔎 Ссылка требует внимания модерации",
+                    review,
+                    "сообщение оставлено; модерации отправлен результат проверки",
+                    force_ping=any(item.status == "suspicious" for item in review),
+                )
+
+        review_extensions = {
+            str(item).lower() for item in settings.get("review_attachment_extensions", [])
+        }
+        attachment_verdicts: list[ReputationVerdict] = []
+        for attachment in message.attachments[:3]:
+            if Path(attachment.filename).suffix.lower() not in review_extensions:
+                continue
+            verdict = await self.security_scanner.scan_attachment(attachment)
+            attachment_verdicts.append(verdict)
+
+        malicious_files = [item for item in attachment_verdicts if item.is_malicious]
+        if malicious_files and bool(settings.get("auto_delete_malicious_attachments", True)):
+            details = "\n".join(
+                f"{item.item}: {'; '.join(item.reasons[:3])} | SHA-256 {item.sha256}"
+                for item in malicious_files
+            )
+            await self.handle_antispam(
+                message,
+                "VirusTotal подтвердил вредоносное вложение",
+                now,
+                extra_details=details,
+            )
+            return True
+        if attachment_verdicts:
+            await self.send_security_review_alert(
+                message,
+                "📦 Приложение или архив отправлен на проверку",
+                attachment_verdicts,
+                "файл не удалён автоматически; модерация получила отчёт",
+                force_ping=any(item.status in {"suspicious", "unknown"} for item in attachment_verdicts),
+            )
+        return False
+
+    def antispam_reason(self, message: discord.Message, now: float) -> Optional[str]:
+        settings = self.antispam_settings()
+        key = (message.guild.id, message.author.id)
+        history = self.antispam_history[key]
+        normalized = self.normalize_antispam_text(message.content)
+        urls = self.extract_message_urls(message.content)
+        attachment_names = tuple(attachment.filename.lower() for attachment in message.attachments)
+        history.append(
+            {
+                "time": now,
+                "message": message,
+                "normalized": normalized,
+                "urls": urls,
+                "channel_id": message.channel.id,
+            }
+        )
+
+        retention = max(
+            int(settings.get("cleanup_window_seconds", 90)),
+            int(settings.get("duplicate_window_seconds", 35)),
+            int(settings.get("link_repeat_window_seconds", 45)),
+            120,
+        )
+        while history and now - float(history[0]["time"]) > retention:
+            history.popleft()
+
+        if bool(settings.get("block_dangerous_attachments", True)):
+            for filename in attachment_names:
+                if Path(filename).suffix.lower() in DANGEROUS_ATTACHMENT_EXTENSIONS:
+                    return f"опасное вложение `{filename}`"
+
+        raw_mention_count = len(message.raw_mentions) + len(message.raw_role_mentions)
+        if message.mention_everyone:
+            raw_mention_count += 2
+        if raw_mention_count >= int(settings.get("max_mentions", 5)):
+            return f"массовые упоминания ({raw_mention_count})"
+
+        if len(urls) >= int(settings.get("max_links_per_message", 4)):
+            return f"слишком много ссылок в одном сообщении ({len(urls)})"
+
+        if urls and bool(settings.get("suspicious_link_filter", True)):
+            if any(phrase in normalized for phrase in SUSPICIOUS_LINK_PHRASES):
+                return "подозрительная мошенническая ссылка"
+
+        message_window = int(settings.get("message_window_seconds", 8))
+        recent_messages = [item for item in history if now - float(item["time"]) <= message_window]
+        if len(recent_messages) >= int(settings.get("max_messages", 6)):
+            return f"флуд ({len(recent_messages)} сообщений за {message_window} сек.)"
+
+        duplicate_window = int(settings.get("duplicate_window_seconds", 35))
+        if normalized and len(normalized) >= 4:
+            duplicates = [
+                item for item in history
+                if now - float(item["time"]) <= duplicate_window and item["normalized"] == normalized
+            ]
+            if len(duplicates) >= int(settings.get("max_duplicate_messages", 3)):
+                return f"повтор одинакового сообщения ({len(duplicates)} раз)"
+
+        link_window = int(settings.get("link_repeat_window_seconds", 45))
+        if urls:
+            url_counts: dict[str, int] = defaultdict(int)
+            for item in history:
+                if now - float(item["time"]) > link_window:
+                    continue
+                for url in set(item["urls"]):
+                    url_counts[url] += 1
+            most_repeated = max((url_counts.get(url, 0) for url in urls), default=0)
+            if most_repeated >= int(settings.get("max_same_link_messages", 3)):
+                return f"массовая рассылка одной ссылки ({most_repeated} раз)"
+
+        cross_window = int(settings.get("cross_channel_window_seconds", 12))
+        cross_messages = [item for item in history if now - float(item["time"]) <= cross_window]
+        cross_channels = {int(item["channel_id"]) for item in cross_messages}
+        if (
+            len(cross_messages) >= int(settings.get("cross_channel_messages", 4))
+            and len(cross_channels) >= int(settings.get("cross_channel_count", 3))
+        ):
+            return f"быстрая рассылка по каналам ({len(cross_channels)} канала)"
+
+        return None
+
+    async def delete_antispam_messages(self, message: discord.Message, now: float) -> int:
+        settings = self.antispam_settings()
+        key = (message.guild.id, message.author.id)
+        history = self.antispam_history.get(key, deque())
+        cleanup_window = int(settings.get("cleanup_window_seconds", 90))
+        cleanup_limit = int(settings.get("cleanup_message_limit", 25))
+        candidates = [
+            item["message"] for item in history
+            if now - float(item["time"]) <= cleanup_window
+        ][-cleanup_limit:]
+        if not bool(settings.get("delete_recent_messages", True)):
+            candidates = [message]
+
+        deleted = 0
+        seen_ids: set[int] = set()
+        for candidate in reversed(candidates):
+            if candidate.id in seen_ids:
+                continue
+            seen_ids.add(candidate.id)
+            try:
+                await candidate.delete()
+                deleted += 1
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                continue
+        return deleted
+
+    async def send_antispam_alert(
+        self,
+        message: discord.Message,
+        reason: str,
+        deleted: int,
+        timeout_applied: bool,
+        timeout_error: Optional[str],
+        extra_details: Optional[str] = None,
+    ) -> None:
+        settings = self.antispam_settings()
+        channel_id = int(settings.get("log_channel_id", 0) or 0)
+        channel = message.guild.get_channel(channel_id) if channel_id else None
+        if channel is None or not isinstance(channel, discord.abc.Messageable):
+            channel = message.guild.system_channel
+        if channel is None or not isinstance(channel, discord.abc.Messageable):
+            return
+
+        excerpt = message.content.strip() or "[сообщение без текста]"
+        if message.attachments:
+            files = ", ".join(attachment.filename for attachment in message.attachments)
+            excerpt = f"{excerpt}\nВложения: {files}"
+        excerpt = excerpt.replace("```", "`​``")[:700]
+        timeout_text = "✅ применён" if timeout_applied else f"❌ не применён ({timeout_error or 'неизвестная причина'})"
+        embed = discord.Embed(
+            title="🛡️ AntiSpam остановил рассылку",
+            description=(
+                f"**Пользователь:** {message.author} (`{message.author.id}`)\n"
+                f"**Канал:** {message.channel.mention}\n"
+                f"**Причина:** {reason}\n"
+                f"**Удалено сообщений:** {deleted}\n"
+                f"**Тайм-аут:** {timeout_text}"
+            ),
+            color=discord.Color.red(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(name="Фрагмент", value=f"```{excerpt}```", inline=False)
+        if extra_details:
+            embed.add_field(name="Результат проверки", value=extra_details[:1024], inline=False)
+        if isinstance(message.author, discord.Member):
+            embed.add_field(
+                name="Аккаунт",
+                value=(
+                    f"Создан: <t:{int(message.author.created_at.timestamp())}:R>\n"
+                    f"На сервере: <t:{int(message.author.joined_at.timestamp())}:R>"
+                    if message.author.joined_at else
+                    f"Создан: <t:{int(message.author.created_at.timestamp())}:R>"
+                ),
+                inline=False,
+            )
+
+        alert_roles = self.security_alert_roles(message.guild)
+        content = " ".join(role.mention for role in alert_roles) or None
+        try:
+            await channel.send(
+                content=content,
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    async def handle_antispam(
+        self,
+        message: discord.Message,
+        reason: str,
+        now: float,
+        extra_details: Optional[str] = None,
+    ) -> None:
+        settings = self.antispam_settings()
+        key = (message.guild.id, message.author.id)
+        cooldown = int(settings.get("action_cooldown_seconds", 20))
+        last_action = self.antispam_last_action.get(key, 0.0)
+        if now - last_action < cooldown:
+            try:
+                await message.delete()
+            except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                pass
+            return
+
+        self.antispam_last_action[key] = now
+        deleted = await self.delete_antispam_messages(message, now)
+        timeout_applied = False
+        timeout_error: Optional[str] = None
+
+        member = message.author if isinstance(message.author, discord.Member) else None
+        bot_member = message.guild.me
+        if member is None:
+            timeout_error = "автор не является участником сервера"
+        elif member.id == message.guild.owner_id:
+            timeout_error = "владельцу сервера нельзя выдать тайм-аут"
+        elif bot_member is None or not bot_member.guild_permissions.moderate_members:
+            timeout_error = "у бота нет права Moderate Members"
+        elif bot_member.top_role <= member.top_role:
+            timeout_error = "роль бота находится ниже роли участника"
+        else:
+            try:
+                until = discord.utils.utcnow() + timedelta(minutes=int(settings.get("timeout_minutes", 60)))
+                await member.timeout(until, reason=f"Peach AntiSpam: {reason}")
+                timeout_applied = True
+            except discord.Forbidden:
+                timeout_error = "Discord запретил действие — проверь права и иерархию ролей"
+            except discord.HTTPException:
+                timeout_error = "ошибка Discord API"
+
+        if bool(settings.get("dm_user", True)) and member is not None:
+            try:
+                await member.send(
+                    f"🛡️ На сервере **{message.guild.name}** сработала защита от спама.\n"
+                    f"Причина: **{reason}**.\n"
+                    "Если твой аккаунт взломали — срочно смени пароль, заверши все сеансы и включи 2FA."
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+        await self.send_antispam_alert(
+            message,
+            reason,
+            deleted,
+            timeout_applied,
+            timeout_error,
+            extra_details=extra_details,
+        )
+        self.antispam_history.pop(key, None)
 
     def xp_for_level(self, level: int) -> int:
         settings = self.leveling_settings()
@@ -1169,13 +1712,137 @@ class ServerBot(commands.Bot):
     async def before_voice_xp_loop(self) -> None:
         await self.wait_until_ready()
 
-    async def on_voice_state_update(self, member: discord.Member, before: discord.VoiceState, after: discord.VoiceState) -> None:
+    async def send_voice_security_alert(
+        self,
+        member: discord.Member,
+        events: list[dict[str, Any]],
+        disconnected: bool,
+        timeout_applied: bool,
+        timeout_error: Optional[str],
+    ) -> None:
+        channel = self.security_log_channel(member.guild)
+        if channel is None:
+            return
+        transitions = []
+        for item in events[-8:]:
+            before_name = item.get("before") or "не в канале"
+            after_name = item.get("after") or "не в канале"
+            transitions.append(f"• {before_name} → {after_name}")
+        embed = discord.Embed(
+            title="🎙️ Зафиксирован спам по голосовым каналам",
+            description=(
+                f"**Пользователь:** {member.mention} (`{member.id}`)\n"
+                f"**Переходов:** {len(events)}\n"
+                f"**Отключён от голосового:** {'да' if disconnected else 'нет'}\n"
+                f"**Тайм-аут:** {'применён' if timeout_applied else 'не применён'}"
+                + (f" — {timeout_error}" if timeout_error else "")
+            ),
+            color=discord.Color.red(),
+            timestamp=discord.utils.utcnow(),
+        )
+        if transitions:
+            embed.add_field(name="Последние переходы", value="\n".join(transitions)[:1024], inline=False)
+        content = " ".join(role.mention for role in self.security_alert_roles(member.guild)) or None
+        try:
+            await channel.send(
+                content=content,
+                embed=embed,
+                allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
+            )
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+    async def inspect_voice_hopping(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+        now: float,
+    ) -> None:
+        settings = self.antispam_settings()
+        if not bool(settings.get("enabled", True)) or not bool(settings.get("voice_hop_protection", True)):
+            return
+        if before.channel == after.channel:
+            return
+        channel_for_bypass = after.channel or before.channel
+        if self.member_antispam_bypassed(member, channel_for_bypass):
+            return
+
+        key = (member.guild.id, member.id)
+        history = self.voice_security_history[key]
+        history.append(
+            {
+                "time": now,
+                "before": before.channel.name if before.channel else None,
+                "after": after.channel.name if after.channel else None,
+            }
+        )
+        window = max(5, int(settings.get("voice_hop_window_seconds", 30)))
+        while history and now - float(history[0]["time"]) > window:
+            history.popleft()
+        threshold = max(3, int(settings.get("voice_hop_max_events", 6)))
+        if len(history) < threshold:
+            return
+        if now - self.voice_security_last_action.get(key, 0.0) < window:
+            return
+        self.voice_security_last_action[key] = now
+
+        bot_member = member.guild.me
+        disconnected = False
+        timeout_applied = False
+        timeout_error: Optional[str] = None
+        if (
+            bool(settings.get("disconnect_voice_spammer", True))
+            and after.channel is not None
+            and bot_member is not None
+            and bot_member.guild_permissions.move_members
+        ):
+            try:
+                await member.move_to(None, reason="Peach AntiSpam: частые переходы по голосовым каналам")
+                disconnected = True
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+
+        if member.id == member.guild.owner_id:
+            timeout_error = "владельцу сервера нельзя выдать тайм-аут"
+        elif bot_member is None or not bot_member.guild_permissions.moderate_members:
+            timeout_error = "у бота нет права Moderate Members"
+        elif bot_member.top_role <= member.top_role:
+            timeout_error = "роль бота находится ниже роли участника"
+        else:
+            try:
+                timeout_minutes = max(1, int(settings.get("voice_hop_timeout_minutes", 10)))
+                until = discord.utils.utcnow() + timedelta(minutes=timeout_minutes)
+                await member.timeout(until, reason="Peach AntiSpam: спам переходами по голосовым каналам")
+                timeout_applied = True
+            except discord.Forbidden:
+                timeout_error = "Discord запретил тайм-аут"
+            except discord.HTTPException:
+                timeout_error = "ошибка Discord API"
+
+        await self.send_voice_security_alert(
+            member,
+            list(history),
+            disconnected,
+            timeout_applied,
+            timeout_error,
+        )
+        history.clear()
+
+    async def on_voice_state_update(
+        self,
+        member: discord.Member,
+        before: discord.VoiceState,
+        after: discord.VoiceState,
+    ) -> None:
         if member.bot:
             return
         before_earning = self.is_earning_voice_channel(before.channel)
         after_earning = self.is_earning_voice_channel(after.channel)
         key = (member.guild.id, member.id)
         now = time.time()
+
+        await self.inspect_voice_hopping(member, before, after, now)
 
         if not before_earning and after_earning:
             self.voice_last_award[key] = now
@@ -1226,8 +1893,28 @@ class ServerBot(commands.Bot):
 
     async def on_message(self, message: discord.Message) -> None:
         if message.guild is not None and not message.author.bot:
+            if bool(self.antispam_settings().get("enabled", True)) and not self.antispam_bypassed(message):
+                now = time.time()
+                reason = self.antispam_reason(message, now)
+                if reason is not None:
+                    await self.handle_antispam(message, reason, now)
+                    return
+                if await self.inspect_message_security(message, now):
+                    return
             self.db.increment_messages(message.guild.id, message.author.id, 1)
         await self.process_commands(message)
+
+    async def on_message_edit(self, before: discord.Message, after: discord.Message) -> None:
+        if before.content == after.content or after.guild is None or after.author.bot:
+            return
+        if not bool(self.antispam_settings().get("enabled", True)) or self.antispam_bypassed(after):
+            return
+        now = time.time()
+        reason = self.antispam_reason(after, now)
+        if reason is not None:
+            await self.handle_antispam(after, f"изменённое сообщение: {reason}", now)
+            return
+        await self.inspect_message_security(after, now)
 
 
 bot = ServerBot()
@@ -2300,8 +2987,8 @@ def render_template_text(value: str, guild: discord.Guild, member: discord.Membe
 async def help_admin(interaction: discord.Interaction) -> None:
     embed = discord.Embed(title="📘 Что умеет бот", color=discord.Color.blurple())
     embed.add_field(
-        name="Модерация",
-        value="/clear, /kick, /ban, /timeout, /untimeout, /slowmode, /warn, /warnings, /clearwarnings, /lock, /unlock, /addrole, /removerole, /nickname",
+        name="Модерация и защита",
+        value="/clear, /purge_user, /kick, /ban, /timeout, /untimeout, /slowmode, /warn, /warnings, /clearwarnings, /lock, /unlock, /addrole, /removerole, /nickname, /antispam, /antispam_status, /security_check",
         inline=False,
     )
     embed.add_field(
@@ -2314,8 +3001,215 @@ async def help_admin(interaction: discord.Interaction) -> None:
         value="/relationship_request, /relationships, /relationship_break, /embed_send, /embed_templates, /embed_template_send, /setup_welcome",
         inline=False,
     )
-    embed.set_footer(text="Если хочешь — потом добавим ещё тикеты, логи, антиспам и т.д.")
+    embed.set_footer(text="Peach Lounge Bot • AntiSpam включён по умолчанию")
     await interaction.response.send_message(embed=embed, ephemeral=True)
+
+
+@bot.tree.command(name="antispam", description="Включить или настроить защиту от спама")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+@app_commands.describe(
+    enabled="Включить или выключить защиту",
+    timeout_minutes="Тайм-аут за подтверждённый спам или угрозу",
+    log_channel="Закрытый канал для тревог",
+    moderator_role="Роль модераторов для пинга",
+    administrator_role="Роль администраторов для пинга",
+)
+async def antispam_config_command(
+    interaction: discord.Interaction,
+    enabled: bool,
+    timeout_minutes: app_commands.Range[int, 1, 10080] = 60,
+    log_channel: Optional[discord.TextChannel] = None,
+    moderator_role: Optional[discord.Role] = None,
+    administrator_role: Optional[discord.Role] = None,
+) -> None:
+    settings = bot.antispam_settings()
+    settings["enabled"] = bool(enabled)
+    settings["timeout_minutes"] = int(timeout_minutes)
+    if log_channel is not None:
+        settings["log_channel_id"] = log_channel.id
+
+    existing_ids = {int(x) for x in settings.get("alert_role_ids", []) if str(x).isdigit()}
+    legacy_id = int(settings.get("alert_role_id", 0) or 0)
+    if legacy_id:
+        existing_ids.add(legacy_id)
+    if moderator_role is not None:
+        existing_ids.add(moderator_role.id)
+        settings["alert_role_id"] = moderator_role.id
+    if administrator_role is not None:
+        existing_ids.add(administrator_role.id)
+    settings["alert_role_ids"] = sorted(existing_ids)
+    bot.save_config()
+
+    saved_channel = interaction.guild.get_channel(int(settings.get("log_channel_id", 0) or 0))
+    roles = bot.security_alert_roles(interaction.guild)
+    role_text = " ".join(role.mention for role in roles) if roles else "не заданы"
+    await interaction.response.send_message(
+        f"🛡️ Защита: **{'включена' if enabled else 'выключена'}**\n"
+        f"Тайм-аут: **{timeout_minutes} мин.**\n"
+        f"Логи: {saved_channel.mention if saved_channel else 'системный канал'}\n"
+        f"Пингуемые роли: {role_text}\n"
+        "Одиночные неизвестные ссылки не удаляются: они уходят модерации на проверку.",
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+@bot.tree.command(name="antispam_status", description="Показать состояние защиты от спама")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_guild=True)
+@app_commands.checks.has_permissions(manage_guild=True)
+async def antispam_status(interaction: discord.Interaction) -> None:
+    settings = bot.antispam_settings()
+    log_channel = interaction.guild.get_channel(int(settings.get("log_channel_id", 0) or 0))
+    alert_roles = bot.security_alert_roles(interaction.guild)
+    bot_member = interaction.guild.me
+    permissions_ok = bool(
+        bot_member
+        and bot_member.guild_permissions.manage_messages
+        and bot_member.guild_permissions.moderate_members
+        and bot_member.guild_permissions.read_message_history
+    )
+    voice_permissions_ok = bool(bot_member and bot_member.guild_permissions.move_members)
+    google_ready = bool(os.getenv("SAFE_BROWSING_API_KEY", "").strip())
+    vt_ready = bool(os.getenv("VIRUSTOTAL_API_KEY", "").strip())
+    embed = discord.Embed(
+        title="🛡️ Peach Security",
+        color=discord.Color.green() if settings.get("enabled", True) and permissions_ok else discord.Color.orange(),
+    )
+    embed.add_field(name="Состояние", value="✅ Включена" if settings.get("enabled", True) else "❌ Выключена")
+    embed.add_field(name="Тайм-аут", value=f"{settings.get('timeout_minutes', 60)} мин.")
+    embed.add_field(name="Логи", value=log_channel.mention if log_channel else "Системный канал")
+    embed.add_field(
+        name="Тревога",
+        value=" ".join(role.mention for role in alert_roles) if alert_roles else "Роли не заданы",
+        inline=False,
+    )
+    embed.add_field(
+        name="Проверка ссылок и файлов",
+        value=(
+            f"Google Safe Browsing: {'✅' if google_ready else '❌ нет ключа'}\n"
+            f"VirusTotal: {'✅' if vt_ready else '❌ нет ключа'}\n"
+            "Без ключей бот всё равно ловит флуд и пингует модерацию, но не может надёжно подтвердить репутацию."
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Что удаляется автоматически",
+        value=(
+            "• массовый флуд и рассылка по каналам\n"
+            "• повтор одной ссылки\n"
+            "• массовые упоминания\n"
+            "• ссылка или файл, подтверждённые репутационным сервисом"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Голосовые каналы",
+        value=(
+            "✅ текстовые чаты голосовых отслеживаются\n"
+            f"{'✅' if voice_permissions_ok else '⚠️'} защита от частых входов/выходов и переходов"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Права бота",
+        value=(
+            "✅ Основные права есть"
+            if permissions_ok
+            else "⚠️ Нужны Manage Messages, Read Message History и Moderate Members. Для отключения от голосового нужен Move Members."
+        ),
+        inline=False,
+    )
+    await interaction.response.send_message(
+        embed=embed,
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+@bot.tree.command(name="security_check", description="Проверить ссылку без её открытия")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_messages=True)
+@app_commands.checks.has_permissions(manage_messages=True)
+@app_commands.describe(link="Полная ссылка с http:// или https://")
+async def security_check(interaction: discord.Interaction, link: str) -> None:
+    await interaction.response.defer(ephemeral=True)
+    verdicts = await bot.security_scanner.scan_urls([link])
+    if not verdicts:
+        await interaction.followup.send("Не удалось распознать HTTP/HTTPS-ссылку.", ephemeral=True)
+        return
+    verdict = verdicts[0]
+    reasons = "\n".join(f"• {item}" for item in verdict.reasons[:8])
+    providers = ", ".join(verdict.providers) if verdict.providers else "только локальная проверка"
+    await interaction.followup.send(
+        f"**Результат:** {verdict.status_label}\n"
+        f"**Ссылка:** `{bot.defang_security_item(verdict.item)}`\n"
+        f"**Источники:** {providers}\n"
+        f"{reasons}",
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
+
+
+@bot.tree.command(name="purge_user", description="Удалить сообщения участника во всех текстовых и голосовых чатах")
+@app_commands.guild_only()
+@app_commands.default_permissions(manage_messages=True)
+@app_commands.checks.has_permissions(manage_messages=True)
+@app_commands.describe(member="Чьи сообщения удалить", minutes="За сколько последних минут искать")
+async def purge_user(
+    interaction: discord.Interaction,
+    member: discord.Member,
+    minutes: app_commands.Range[int, 1, 10080] = 120,
+) -> None:
+    await interaction.response.defer(ephemeral=True)
+    after = discord.utils.utcnow() - timedelta(minutes=int(minutes))
+    deleted_total = 0
+    checked_channels = 0
+    failed_channels = 0
+
+    targets: list[discord.abc.GuildChannel] = []
+    targets.extend(interaction.guild.text_channels)
+    targets.extend(interaction.guild.voice_channels)
+    targets.extend(thread for thread in interaction.guild.threads if not thread.archived)
+
+    for channel in targets:
+        bot_member = interaction.guild.me
+        if bot_member is None or not isinstance(channel, discord.abc.Messageable):
+            continue
+        permissions = channel.permissions_for(bot_member)
+        if not (permissions.view_channel and permissions.read_message_history and permissions.manage_messages):
+            continue
+        checked_channels += 1
+        try:
+            if isinstance(channel, (discord.TextChannel, discord.Thread)):
+                deleted = await channel.purge(
+                    limit=1000,
+                    check=lambda msg: msg.author.id == member.id,
+                    after=after,
+                    reason=f"Emergency cleanup by {interaction.user}",
+                )
+                deleted_total += len(deleted)
+            else:
+                async for candidate in channel.history(limit=1000, after=after):
+                    if candidate.author.id != member.id:
+                        continue
+                    try:
+                        await candidate.delete()
+                        deleted_total += 1
+                    except (discord.NotFound, discord.Forbidden, discord.HTTPException):
+                        continue
+        except (discord.Forbidden, discord.HTTPException):
+            failed_channels += 1
+
+    await interaction.followup.send(
+        f"🧹 Готово. Удалено сообщений от {member.mention}: **{deleted_total}**\n"
+        f"Проверено текстовых и голосовых чатов: **{checked_channels}**"
+        + (f"\nНе удалось проверить: **{failed_channels}**" if failed_channels else ""),
+        ephemeral=True,
+        allowed_mentions=discord.AllowedMentions.none(),
+    )
 
 
 @bot.tree.command(name="clear", description="Удалить сообщения в текущем канале")
