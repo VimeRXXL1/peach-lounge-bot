@@ -10,6 +10,7 @@ import subprocess
 import time
 import urllib.request
 import urllib.error
+import uuid
 from collections import defaultdict, deque
 from dataclasses import dataclass
 from datetime import timedelta
@@ -66,6 +67,12 @@ ANTISPAM_DEFAULTS: dict[str, Any] = {
     ],
     "attachment_scan_max_mb": 20,
     "auto_delete_malicious_attachments": True,
+    "manual_review_enabled": True,
+    "manual_review_external_links": True,
+    "manual_review_attachments": True,
+    "manual_review_max_total_mb": 100,
+    "manual_review_dm_user": True,
+    "manual_review_webhook_name": "Peach Lounge Security",
     "voice_hop_protection": True,
     "voice_hop_max_events": 6,
     "voice_hop_window_seconds": 30,
@@ -602,6 +609,30 @@ class Database:
                 )
                 """
             )
+            self.conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS security_pending_messages (
+                    id INTEGER PRIMARY KEY AUTOINCREMENT,
+                    guild_id INTEGER NOT NULL,
+                    channel_id INTEGER NOT NULL,
+                    original_message_id INTEGER NOT NULL,
+                    author_id INTEGER NOT NULL,
+                    author_name TEXT NOT NULL,
+                    author_avatar_url TEXT NOT NULL DEFAULT '',
+                    content TEXT NOT NULL DEFAULT '',
+                    attachments_json TEXT NOT NULL DEFAULT '[]',
+                    log_message_id INTEGER NOT NULL DEFAULT 0,
+                    status TEXT NOT NULL DEFAULT 'pending',
+                    reviewer_id INTEGER NOT NULL DEFAULT 0,
+                    created_at INTEGER NOT NULL,
+                    reviewed_at INTEGER NOT NULL DEFAULT 0
+                )
+                """
+            )
+            self.conn.execute(
+                "CREATE INDEX IF NOT EXISTS idx_security_pending_log "
+                "ON security_pending_messages (guild_id, log_message_id)"
+            )
 
         user_extra_columns = {
             "voice_minutes": "ALTER TABLE users ADD COLUMN voice_minutes INTEGER NOT NULL DEFAULT 0",
@@ -613,6 +644,81 @@ class Database:
             for column, sql in user_extra_columns.items():
                 if not self._column_exists("users", column):
                     self.conn.execute(sql)
+
+    def create_security_pending(
+        self,
+        *,
+        guild_id: int,
+        channel_id: int,
+        original_message_id: int,
+        author_id: int,
+        author_name: str,
+        author_avatar_url: str,
+        content: str,
+        attachments: list[dict[str, Any]],
+    ) -> int:
+        with self.conn:
+            cursor = self.conn.execute(
+                """
+                INSERT INTO security_pending_messages (
+                    guild_id, channel_id, original_message_id, author_id, author_name,
+                    author_avatar_url, content, attachments_json, created_at
+                ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    int(guild_id), int(channel_id), int(original_message_id), int(author_id),
+                    str(author_name)[:100], str(author_avatar_url)[:500], str(content)[:4000],
+                    json.dumps(attachments, ensure_ascii=False), int(time.time()),
+                ),
+            )
+            return int(cursor.lastrowid)
+
+    def set_security_pending_log_message(self, pending_id: int, log_message_id: int) -> None:
+        with self.conn:
+            self.conn.execute(
+                "UPDATE security_pending_messages SET log_message_id = ? WHERE id = ?",
+                (int(log_message_id), int(pending_id)),
+            )
+
+    def get_security_pending_by_log_message(
+        self, guild_id: int, log_message_id: int
+    ) -> Optional[dict[str, Any]]:
+        row = self.conn.execute(
+            """
+            SELECT * FROM security_pending_messages
+            WHERE guild_id = ? AND log_message_id = ?
+            ORDER BY id DESC LIMIT 1
+            """,
+            (int(guild_id), int(log_message_id)),
+        ).fetchone()
+        return dict(row) if row is not None else None
+
+    def claim_security_pending(
+        self, pending_id: int, expected_status: str, new_status: str, reviewer_id: int
+    ) -> bool:
+        with self.conn:
+            cursor = self.conn.execute(
+                """
+                UPDATE security_pending_messages
+                SET status = ?, reviewer_id = ?, reviewed_at = ?
+                WHERE id = ? AND status = ?
+                """,
+                (str(new_status), int(reviewer_id), int(time.time()), int(pending_id), str(expected_status)),
+            )
+            return cursor.rowcount == 1
+
+    def set_security_pending_status(
+        self, pending_id: int, status: str, reviewer_id: int = 0
+    ) -> None:
+        with self.conn:
+            self.conn.execute(
+                """
+                UPDATE security_pending_messages
+                SET status = ?, reviewer_id = ?, reviewed_at = ?
+                WHERE id = ?
+                """,
+                (str(status), int(reviewer_id), int(time.time()), int(pending_id)),
+            )
 
     def ensure_user(self, guild_id: int, user_id: int) -> None:
         with self.conn:
@@ -1079,6 +1185,48 @@ class RelationshipRequestView(discord.ui.View):
         await interaction.followup.send("❌ Предложение отклонено.")
 
 
+class SecurityReviewView(discord.ui.View):
+    def __init__(self, bot: "ServerBot") -> None:
+        super().__init__(timeout=None)
+        self.bot = bot
+
+    @discord.ui.button(
+        label="Одобрить",
+        emoji="✅",
+        style=discord.ButtonStyle.success,
+        custom_id="peach_security_review_approve",
+    )
+    async def approve(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self.bot.handle_security_review_decision(interaction, approve=True)
+
+    @discord.ui.button(
+        label="Отклонить",
+        emoji="❌",
+        style=discord.ButtonStyle.danger,
+        custom_id="peach_security_review_reject",
+    )
+    async def reject(self, interaction: discord.Interaction, button: discord.ui.Button) -> None:
+        await self.bot.handle_security_review_decision(interaction, approve=False)
+
+
+class SecurityReviewResolvedView(discord.ui.View):
+    def __init__(self, approved: bool) -> None:
+        super().__init__(timeout=None)
+        self.add_item(
+            discord.ui.Button(
+                label="Одобрено" if approved else "Отклонено",
+                emoji="✅" if approved else "❌",
+                style=discord.ButtonStyle.success if approved else discord.ButtonStyle.danger,
+                custom_id=(
+                    "peach_security_review_resolved_approved"
+                    if approved
+                    else "peach_security_review_resolved_rejected"
+                ),
+                disabled=True,
+            )
+        )
+
+
 # ------------------------- MAIN BOT -------------------------
 class ServerBot(commands.Bot):
     def __init__(self):
@@ -1097,6 +1245,7 @@ class ServerBot(commands.Bot):
         self.antispam_last_action: dict[tuple[int, int], float] = {}
         self.security_scanner = SecurityScanner(self.antispam_settings)
         self.security_alert_last: dict[tuple[int, int, str], float] = {}
+        self.security_webhook_cache: dict[int, discord.Webhook] = {}
         self.voice_security_history: dict[tuple[int, int], deque[dict[str, Any]]] = defaultdict(
             lambda: deque(maxlen=30)
         )
@@ -1105,6 +1254,7 @@ class ServerBot(commands.Bot):
 
     async def setup_hook(self) -> None:
         self.add_view(RolePanelView(self))
+        self.add_view(SecurityReviewView(self))
         if not self.voice_xp_loop.is_running():
             self.voice_xp_loop.start()
         guild_id = int(self.config.get("guild_id_for_fast_sync", 0) or 0)
@@ -1229,6 +1379,386 @@ class ServerBot(commands.Bot):
         safe = re.sub(r"(?i)^http://", "hxxp://", safe)
         return safe.replace(".", "[.]")[:900]
 
+    def security_review_allowed(self, member: discord.Member) -> bool:
+        permissions = member.guild_permissions
+        if (
+            permissions.administrator
+            or permissions.manage_guild
+            or permissions.manage_messages
+            or permissions.moderate_members
+        ):
+            return True
+        alert_role_ids = {role.id for role in self.security_alert_roles(member.guild)}
+        return any(role.id in alert_role_ids for role in member.roles)
+
+    @staticmethod
+    def security_preview_content(message: discord.Message) -> str:
+        content = (message.content or "").replace("```", "`\u200b``")
+        for raw_url in ServerBot.extract_message_urls(content):
+            content = content.replace(raw_url, ServerBot.defang_security_item(raw_url))
+        return content[:1600] or "*(текст отсутствует — только вложение)*"
+
+    async def save_pending_attachments(self, message: discord.Message) -> list[dict[str, Any]]:
+        settings = self.antispam_settings()
+        max_total = max(1, int(settings.get("manual_review_max_total_mb", 100))) * 1024 * 1024
+        total_size = sum(int(item.size or 0) for item in message.attachments)
+        if total_size > max_total:
+            raise ValueError(
+                f"общий размер вложений {total_size / 1024 / 1024:.1f} МБ превышает "
+                f"лимит очереди {max_total / 1024 / 1024:.0f} МБ"
+            )
+        if not message.attachments:
+            return []
+
+        root = self.db.path.parent / "security_pending" / f"{message.guild.id}_{message.id}"
+        root.mkdir(parents=True, exist_ok=True)
+        records: list[dict[str, Any]] = []
+        try:
+            for index, attachment in enumerate(message.attachments[:10], start=1):
+                original_name = Path(attachment.filename).name or f"attachment_{index}"
+                safe_name = re.sub(r"[^0-9A-Za-zА-Яа-яЁё._() -]+", "_", original_name)[:140]
+                stored_name = f"{index:02d}_{uuid.uuid4().hex[:10]}_{safe_name}"
+                path = root / stored_name
+                await attachment.save(path)
+                records.append(
+                    {
+                        "filename": original_name[:200],
+                        "path": str(path),
+                        "size": int(attachment.size or 0),
+                        "content_type": str(attachment.content_type or ""),
+                        "description": str(attachment.description or "")[:200],
+                    }
+                )
+            return records
+        except Exception:
+            self.cleanup_pending_attachments(records)
+            try:
+                root.rmdir()
+            except OSError:
+                pass
+            raise
+
+    @staticmethod
+    def cleanup_pending_attachments(records: list[dict[str, Any]]) -> None:
+        parents: set[Path] = set()
+        for record in records:
+            path = Path(str(record.get("path", "")))
+            if not str(path):
+                continue
+            parents.add(path.parent)
+            try:
+                path.unlink(missing_ok=True)
+            except OSError:
+                pass
+        for parent in parents:
+            try:
+                parent.rmdir()
+            except OSError:
+                pass
+
+    @staticmethod
+    def pending_attachments_from_row(row: dict[str, Any]) -> list[dict[str, Any]]:
+        try:
+            value = json.loads(str(row.get("attachments_json", "[]")))
+        except (TypeError, ValueError):
+            return []
+        return value if isinstance(value, list) else []
+
+    async def quarantine_security_message(
+        self,
+        message: discord.Message,
+        verdicts: list[ReputationVerdict],
+        title: str,
+    ) -> bool:
+        if message.guild is None:
+            return False
+        log_channel = self.security_log_channel(message.guild)
+        if log_channel is None:
+            return False
+
+        try:
+            saved_attachments = await self.save_pending_attachments(message)
+        except Exception as exc:
+            await self.send_security_review_alert(
+                message,
+                "⚠️ Не удалось поместить сообщение в очередь",
+                verdicts,
+                f"сообщение оставлено: {type(exc).__name__}: {exc}",
+                force_ping=True,
+            )
+            return False
+
+        pending_id = self.db.create_security_pending(
+            guild_id=message.guild.id,
+            channel_id=message.channel.id,
+            original_message_id=message.id,
+            author_id=message.author.id,
+            author_name=message.author.display_name,
+            author_avatar_url=str(message.author.display_avatar.url),
+            content=message.content or "",
+            attachments=saved_attachments,
+        )
+
+        embed = discord.Embed(
+            title=title,
+            description=(
+                f"**Автор:** {message.author.mention} (`{message.author.id}`)\n"
+                f"**Канал:** {message.channel.mention}\n"
+                "**Статус:** ⏳ сообщение скрыто и ждёт решения\n\n"
+                "Нажмите ✅, чтобы опубликовать его обратно, или ❌, чтобы окончательно удалить."
+            ),
+            color=discord.Color.orange(),
+            timestamp=discord.utils.utcnow(),
+        )
+        embed.add_field(
+            name="Текст сообщения",
+            value=f"```\n{self.security_preview_content(message)}\n```"[:1024],
+            inline=False,
+        )
+        if saved_attachments:
+            attachment_text = "\n".join(
+                f"• `{item.get('filename', 'файл')}` — {int(item.get('size', 0)) / 1024 / 1024:.2f} МБ"
+                for item in saved_attachments[:10]
+            )
+            embed.add_field(name="Вложения", value=attachment_text[:1024], inline=False)
+        for index, verdict in enumerate(verdicts[:5], start=1):
+            reasons = "; ".join(verdict.reasons[:4]) or "нет дополнительных данных"
+            providers = ", ".join(verdict.providers) if verdict.providers else "локальная проверка"
+            embed.add_field(
+                name=f"Проверка {index}: {verdict.status_label}",
+                value=(
+                    f"`{self.defang_security_item(verdict.item)}`\n"
+                    f"**Источник:** {providers}\n"
+                    f"**Причины:** {reasons}"
+                )[:1024],
+                inline=False,
+            )
+        embed.set_footer(text=f"Заявка #{pending_id} • кнопки работают после перезапуска бота")
+        content = " ".join(role.mention for role in self.security_alert_roles(message.guild)) or None
+
+        try:
+            review_message = await log_channel.send(
+                content=content,
+                embed=embed,
+                view=SecurityReviewView(self),
+                allowed_mentions=discord.AllowedMentions(roles=True, users=False, everyone=False),
+            )
+            self.db.set_security_pending_log_message(pending_id, review_message.id)
+        except (discord.Forbidden, discord.HTTPException):
+            self.db.set_security_pending_status(pending_id, "failed")
+            self.cleanup_pending_attachments(saved_attachments)
+            return False
+
+        try:
+            await message.delete()
+        except (discord.Forbidden, discord.HTTPException) as exc:
+            self.db.set_security_pending_status(pending_id, "failed")
+            self.cleanup_pending_attachments(saved_attachments)
+            failed_embed = discord.Embed.from_dict(embed.to_dict())
+            failed_embed.color = discord.Color.red()
+            failed_embed.add_field(
+                name="Ошибка",
+                value=f"Не удалось скрыть исходное сообщение: `{type(exc).__name__}`. Оно осталось в канале.",
+                inline=False,
+            )
+            try:
+                await review_message.edit(embed=failed_embed, view=SecurityReviewResolvedView(False))
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+            return False
+
+        if bool(self.antispam_settings().get("manual_review_dm_user", True)):
+            try:
+                await message.author.send(
+                    f"⏳ Твоё сообщение в **{message.guild.name}** временно отправлено на проверку "
+                    "модерации. После одобрения бот опубликует его обратно."
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        return True
+
+    async def get_security_webhook(
+        self, channel: Any
+    ) -> Optional[discord.Webhook]:
+        target = channel.parent if isinstance(channel, discord.Thread) else channel
+        target_id = int(getattr(target, "id", 0) or 0)
+        cached = self.security_webhook_cache.get(target_id)
+        if cached is not None:
+            return cached
+        guild = getattr(target, "guild", None)
+        if guild is None or guild.me is None:
+            return None
+        permissions = target.permissions_for(guild.me)
+        if not permissions.manage_webhooks:
+            return None
+        try:
+            webhooks = await target.webhooks()
+            webhook_name = str(self.antispam_settings().get("manual_review_webhook_name", "Peach Lounge Security"))
+            webhook = discord.utils.get(webhooks, name=webhook_name)
+            if webhook is None:
+                webhook = await target.create_webhook(name=webhook_name, reason="Публикация одобренных сообщений")
+            self.security_webhook_cache[target_id] = webhook
+            return webhook
+        except (AttributeError, discord.Forbidden, discord.HTTPException):
+            return None
+
+    @staticmethod
+    def discord_files_from_records(records: list[dict[str, Any]]) -> list[discord.File]:
+        files: list[discord.File] = []
+        for record in records:
+            path = Path(str(record.get("path", "")))
+            if not path.is_file():
+                continue
+            files.append(discord.File(path, filename=str(record.get("filename") or path.name)[:200]))
+        return files
+
+    async def publish_approved_security_message(
+        self, row: dict[str, Any], moderator: discord.Member
+    ) -> None:
+        guild = moderator.guild
+        channel = guild.get_channel_or_thread(int(row["channel_id"]))
+        if channel is None:
+            channel = await self.fetch_channel(int(row["channel_id"]))
+        if not isinstance(channel, discord.abc.Messageable):
+            raise RuntimeError("исходный канал недоступен")
+
+        records = self.pending_attachments_from_row(row)
+        author_id = int(row["author_id"])
+        author_name = str(row.get("author_name") or f"Пользователь {author_id}")[:80]
+        avatar_url = str(row.get("author_avatar_url") or "")
+        marker = (
+            f"\n\n-# ✅ Одобрено модерацией • автор: <@{author_id}> • "
+            f"проверил: {moderator.mention}"
+        )
+        original_content = str(row.get("content") or "")
+        content = original_content[: max(0, 2000 - len(marker))] + marker
+        if not original_content and records:
+            content = marker.lstrip()
+        allowed_mentions = discord.AllowedMentions.none()
+
+        webhook = (
+            await self.get_security_webhook(channel)
+            if isinstance(channel, (discord.TextChannel, discord.VoiceChannel, discord.Thread))
+            else None
+        )
+        if webhook is not None:
+            kwargs: dict[str, Any] = {
+                "content": content,
+                "username": author_name,
+                "files": self.discord_files_from_records(records),
+                "allowed_mentions": allowed_mentions,
+                "wait": True,
+            }
+            if avatar_url:
+                kwargs["avatar_url"] = avatar_url
+            if isinstance(channel, discord.Thread):
+                kwargs["thread"] = channel
+            await webhook.send(**kwargs)
+        else:
+            files = self.discord_files_from_records(records)
+            header = f"✅ **Одобрено модерацией** • автор: <@{author_id}> • проверил: {moderator.mention}\n"
+            await channel.send(
+                content=(header + original_content)[:2000],
+                files=files,
+                allowed_mentions=allowed_mentions,
+            )
+
+    async def update_security_review_card(
+        self, interaction: discord.Interaction, approved: bool, moderator: discord.Member
+    ) -> None:
+        if interaction.message is None:
+            return
+        if interaction.message.embeds:
+            embed = discord.Embed.from_dict(interaction.message.embeds[0].to_dict())
+        else:
+            embed = discord.Embed(title="Проверка сообщения")
+        embed.color = discord.Color.green() if approved else discord.Color.red()
+        embed.add_field(
+            name="Решение",
+            value=(
+                f"{'✅ Одобрено и опубликовано' if approved else '❌ Отклонено и удалено'}\n"
+                f"**Модератор:** {moderator.mention} (`{moderator.id}`)"
+            ),
+            inline=False,
+        )
+        await interaction.message.edit(embed=embed, view=SecurityReviewResolvedView(approved))
+
+    async def handle_security_review_decision(
+        self, interaction: discord.Interaction, approve: bool
+    ) -> None:
+        if (
+            interaction.guild is None
+            or interaction.message is None
+            or not isinstance(interaction.user, discord.Member)
+        ):
+            await interaction.response.send_message("Эта кнопка доступна только на сервере.", ephemeral=True)
+            return
+        if not self.security_review_allowed(interaction.user):
+            await interaction.response.send_message(
+                "❌ Решать судьбу сообщения могут только модераторы и администраторы.",
+                ephemeral=True,
+            )
+            return
+        await interaction.response.defer(ephemeral=True)
+        row = self.db.get_security_pending_by_log_message(interaction.guild.id, interaction.message.id)
+        if row is None:
+            await interaction.followup.send("Заявка не найдена в базе.", ephemeral=True)
+            return
+        if str(row.get("status")) != "pending":
+            await interaction.followup.send(
+                f"Эта заявка уже обработана. Статус: `{row.get('status')}`.",
+                ephemeral=True,
+            )
+            return
+
+        pending_id = int(row["id"])
+        next_status = "approving" if approve else "rejected"
+        if not self.db.claim_security_pending(
+            pending_id, "pending", next_status, interaction.user.id
+        ):
+            await interaction.followup.send("Другой модератор уже обрабатывает эту заявку.", ephemeral=True)
+            return
+
+        records = self.pending_attachments_from_row(row)
+        if approve:
+            try:
+                await self.publish_approved_security_message(row, interaction.user)
+            except Exception as exc:
+                self.db.set_security_pending_status(pending_id, "pending")
+                await interaction.followup.send(
+                    f"❌ Не удалось опубликовать сообщение: `{type(exc).__name__}: {exc}`. "
+                    "Заявка снова доступна для решения.",
+                    ephemeral=True,
+                )
+                return
+            self.db.set_security_pending_status(pending_id, "approved", interaction.user.id)
+            self.db.increment_messages(interaction.guild.id, int(row["author_id"]), 1)
+        else:
+            self.db.set_security_pending_status(pending_id, "rejected", interaction.user.id)
+
+        self.cleanup_pending_attachments(records)
+        try:
+            await self.update_security_review_card(interaction, approve, interaction.user)
+        except (discord.Forbidden, discord.HTTPException):
+            pass
+
+        member = interaction.guild.get_member(int(row["author_id"]))
+        if member is not None and bool(self.antispam_settings().get("manual_review_dm_user", True)):
+            try:
+                await member.send(
+                    (
+                        f"✅ Твоё сообщение в **{interaction.guild.name}** одобрено и опубликовано."
+                        if approve
+                        else f"❌ Твоё сообщение в **{interaction.guild.name}** отклонено модерацией."
+                    )
+                )
+            except (discord.Forbidden, discord.HTTPException):
+                pass
+        await interaction.followup.send(
+            "✅ Сообщение опубликовано." if approve else "❌ Сообщение окончательно удалено.",
+            ephemeral=True,
+        )
+
     async def send_security_review_alert(
         self,
         message: discord.Message,
@@ -1312,37 +1842,9 @@ class ServerBot(commands.Bot):
             return False
 
         urls = self.extract_message_urls(message.content)
+        url_verdicts: list[ReputationVerdict] = []
         if urls:
-            verdicts = await self.security_scanner.scan_urls(urls)
-            malicious = [item for item in verdicts if item.is_malicious]
-            if malicious and bool(settings.get("auto_delete_malicious_links", True)):
-                details = "\n".join(
-                    f"{item.status_label}: {self.defang_security_item(item.item)} — {'; '.join(item.reasons[:3])}"
-                    for item in malicious
-                )
-                await self.handle_antispam(
-                    message,
-                    "репутационные сервисы подтвердили вредоносную ссылку",
-                    now,
-                    extra_details=details,
-                )
-                return True
-
-            should_alert = bool(settings.get("alert_on_external_link", True))
-            review = [
-                item
-                for item in verdicts
-                if item.status in {"suspicious", "unknown"}
-                or (should_alert and not self.security_scanner.trusted_domain(item.domain))
-            ]
-            if review:
-                await self.send_security_review_alert(
-                    message,
-                    "🔎 Ссылка требует внимания модерации",
-                    review,
-                    "сообщение оставлено; модерации отправлен результат проверки",
-                    force_ping=any(item.status == "suspicious" for item in review),
-                )
+            url_verdicts = await self.security_scanner.scan_urls(urls)
 
         review_extensions = {
             str(item).lower() for item in settings.get("review_attachment_extensions", [])
@@ -1351,8 +1853,21 @@ class ServerBot(commands.Bot):
         for attachment in message.attachments[:3]:
             if Path(attachment.filename).suffix.lower() not in review_extensions:
                 continue
-            verdict = await self.security_scanner.scan_attachment(attachment)
-            attachment_verdicts.append(verdict)
+            attachment_verdicts.append(await self.security_scanner.scan_attachment(attachment))
+
+        malicious_urls = [item for item in url_verdicts if item.is_malicious]
+        if malicious_urls and bool(settings.get("auto_delete_malicious_links", True)):
+            details = "\n".join(
+                f"{item.status_label}: {self.defang_security_item(item.item)} — {'; '.join(item.reasons[:3])}"
+                for item in malicious_urls
+            )
+            await self.handle_antispam(
+                message,
+                "репутационные сервисы подтвердили вредоносную ссылку",
+                now,
+                extra_details=details,
+            )
+            return True
 
         malicious_files = [item for item in attachment_verdicts if item.is_malicious]
         if malicious_files and bool(settings.get("auto_delete_malicious_attachments", True)):
@@ -1367,13 +1882,34 @@ class ServerBot(commands.Bot):
                 extra_details=details,
             )
             return True
-        if attachment_verdicts:
+
+        review: list[ReputationVerdict] = []
+        if urls:
+            review_external = bool(settings.get("manual_review_external_links", True))
+            review.extend(
+                item
+                for item in url_verdicts
+                if item.status in {"suspicious", "unknown"}
+                or (review_external and not self.security_scanner.trusted_domain(item.domain))
+            )
+        if attachment_verdicts and bool(settings.get("manual_review_attachments", True)):
+            review.extend(attachment_verdicts)
+
+        if review and bool(settings.get("manual_review_enabled", True)):
+            title = (
+                "📦 Файл или ссылка ждёт решения модерации"
+                if attachment_verdicts
+                else "🔎 Ссылка ждёт решения модерации"
+            )
+            return await self.quarantine_security_message(message, review, title)
+
+        if review:
             await self.send_security_review_alert(
                 message,
-                "📦 Приложение или архив отправлен на проверку",
-                attachment_verdicts,
-                "файл не удалён автоматически; модерация получила отчёт",
-                force_ping=any(item.status in {"suspicious", "unknown"} for item in attachment_verdicts),
+                "🔎 Ссылка или файл требует внимания модерации",
+                review,
+                "сообщение оставлено; модерации отправлен результат проверки",
+                force_ping=any(item.status in {"suspicious", "unknown"} for item in review),
             )
         return False
 
@@ -3071,7 +3607,7 @@ async def antispam_config_command(
         f"Тайм-аут: **{timeout_minutes} мин.**\n"
         f"Логи: {saved_channel.mention if saved_channel else 'системный канал'}\n"
         f"Пингуемые роли: {role_text}\n"
-        "Одиночные неизвестные ссылки не удаляются: они уходят модерации на проверку.",
+        "Подозрительные ссылки и файлы временно скрываются до решения модерации через ✅/❌.",
         ephemeral=True,
         allowed_mentions=discord.AllowedMentions.none(),
     )
@@ -3123,6 +3659,15 @@ async def antispam_status(interaction: discord.Interaction) -> None:
             "• повтор одной ссылки\n"
             "• массовые упоминания\n"
             "• ссылка или файл, подтверждённые репутационным сервисом"
+        ),
+        inline=False,
+    )
+    embed.add_field(
+        name="Ручное одобрение",
+        value=(
+            "✅ Включено: подозрительное сообщение скрывается до нажатия ✅ или ❌"
+            if settings.get("manual_review_enabled", True)
+            else "❌ Выключено: бот только отправляет предупреждение"
         ),
         inline=False,
     )
