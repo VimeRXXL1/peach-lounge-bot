@@ -4409,6 +4409,120 @@ async def embed_send(
     await interaction.response.send_message(f"Embed отправлен в {channel.mention}.", ephemeral=True)
 
 
+# ------------------------- /SAY — EMBED ИЗ JSON-КОДА -------------------------
+
+
+class SayEmbedModal(discord.ui.Modal):
+    def __init__(self, channel: discord.TextChannel):
+        super().__init__(title="Отправить Embed через Peach Bot")
+        self.target_channel = channel
+
+        self.embed_code = discord.ui.TextInput(
+            label="JSON-код из Embed Builder",
+            placeholder='Вставь код, начинающийся с {"content": ...',
+            style=discord.TextStyle.paragraph,
+            required=True,
+            max_length=4000,
+        )
+        self.add_item(self.embed_code)
+
+    async def on_submit(self, interaction: discord.Interaction) -> None:
+        await interaction.response.defer(ephemeral=True)
+
+        try:
+            raw_code = str(self.embed_code.value).strip()
+
+            # Можно вставлять JSON как есть или вместе с блоком ```json ... ```.
+            if raw_code.startswith("```"):
+                lines = raw_code.splitlines()
+                if lines and lines[0].strip().startswith("```"):
+                    lines.pop(0)
+                if lines and lines[-1].strip() == "```":
+                    lines.pop()
+                raw_code = "\n".join(lines).strip()
+
+            data = json.loads(raw_code)
+            if not isinstance(data, dict):
+                raise ValueError("JSON должен содержать объект.")
+
+            content = data.get("content")
+            embeds_data = data.get("embeds")
+
+            # Дополнительно поддерживаем {"embed": {...}} и один чистый объект Embed.
+            if embeds_data is None and isinstance(data.get("embed"), dict):
+                embeds_data = [data["embed"]]
+            elif embeds_data is None:
+                embed_keys = {
+                    "title", "description", "color", "fields", "footer",
+                    "image", "thumbnail", "author", "url", "timestamp",
+                }
+                if any(key in data for key in embed_keys):
+                    embeds_data = [data]
+                    content = None
+
+            if not isinstance(embeds_data, list) or not embeds_data:
+                raise ValueError("В JSON не найден ни один Embed.")
+            if len(embeds_data) > 10:
+                raise ValueError("Discord разрешает максимум 10 Embed в одном сообщении.")
+
+            embeds: list[discord.Embed] = []
+            for embed_data in embeds_data:
+                if not isinstance(embed_data, dict):
+                    raise ValueError("Каждый Embed должен быть JSON-объектом.")
+                embeds.append(discord.Embed.from_dict(embed_data))
+
+            if content is not None:
+                content = str(content)[:2000]
+
+            await self.target_channel.send(
+                content=content or None,
+                embeds=embeds,
+                allowed_mentions=discord.AllowedMentions(
+                    everyone=True,
+                    roles=True,
+                    users=True,
+                    replied_user=False,
+                ),
+            )
+
+            await interaction.followup.send(
+                f"✅ Сообщение отправлено в {self.target_channel.mention} от имени Peach Bot.",
+                ephemeral=True,
+            )
+
+        except json.JSONDecodeError as error:
+            await interaction.followup.send(
+                "❌ Ошибка в JSON-коде.\n"
+                f"Строка: `{error.lineno}` • символ: `{error.colno}`\n"
+                f"Причина: `{error.msg}`",
+                ephemeral=True,
+            )
+        except discord.Forbidden:
+            await interaction.followup.send(
+                "❌ У Peach Bot недостаточно прав в выбранном канале. "
+                "Проверь права на отправку сообщений, Embed и упоминания.",
+                ephemeral=True,
+            )
+        except discord.HTTPException as error:
+            await interaction.followup.send(
+                f"❌ Discord не принял сообщение: `{error}`",
+                ephemeral=True,
+            )
+        except Exception as error:
+            await interaction.followup.send(
+                f"❌ Не удалось отправить сообщение: `{error}`",
+                ephemeral=True,
+            )
+
+
+@bot.tree.command(name="say", description="Отправить готовый Embed-код от имени Peach Bot")
+@app_commands.guild_only()
+@app_commands.default_permissions(administrator=True)
+@app_commands.describe(channel="Канал, куда отправить сообщение")
+async def say(interaction: discord.Interaction, channel: discord.TextChannel) -> None:
+    await interaction.response.send_modal(SayEmbedModal(channel))
+
+
 @bot.tree.command(name="setup_welcome", description="Настроить авто-приветствие")
 @app_commands.guild_only()
 @app_commands.default_permissions(administrator=True)
